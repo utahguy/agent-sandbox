@@ -247,12 +247,14 @@ if [ -n "$COMPOSE_FILE" ]; then
     echo "Starting project services ($(basename "$COMPOSE_FILE"))..."
     # Must use podman compose so services share the same runtime as the sandbox
     run_podman compose -f "$COMPOSE_FILE" up -d
-    # Connect the sandbox to the compose network so it can reach services
-    COMPOSE_PROJECT="$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')"
-    COMPOSE_NETWORK="${COMPOSE_PROJECT}_default"
-    if run_podman network exists "$COMPOSE_NETWORK" 2>/dev/null; then
-        EXTRA_COMPOSE_ARGS=(--network "$COMPOSE_NETWORK")
-    fi
+    # Connect the sandbox to the networks used by compose services.
+    # Inspect the running compose containers to find their networks.
+    while IFS= read -r net; do
+        [ -z "$net" ] && [ "$net" = "podman" ] && continue
+        EXTRA_COMPOSE_ARGS+=(--network "$net")
+    done < <(run_podman compose -f "$COMPOSE_FILE" ps -q 2>/dev/null \
+        | xargs -r run_podman inspect --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null \
+        | sort -u)
 fi
 
 # Parse any extra podman args from environment
