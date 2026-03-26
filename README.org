@@ -1,0 +1,184 @@
+#+TITLE: agent-sandbox
+#+DESCRIPTION: Run AI coding agents in unrestricted Podman containers
+
+* Overview
+
+~agent-sandbox~ runs AI coding agents inside rootless Podman containers with full filesystem access to your project. It handles authentication, git/SSH/GitHub CLI config, and per-project toolchain management automatically.
+
+Supported agents:
+- *Claude Code* (default) — Anthropic's coding agent
+- *Codex* — OpenAI's coding agent
+- *Aider* — Open-source AI pair programming tool
+
+* Prerequisites
+
+- [[https://podman.io/][Podman]] (rootless) — the container runtime
+- An active subscription or API key for at least one agent:
+  - Claude Code: Claude Pro/Max subscription (OAuth login)
+  - Codex: ChatGPT Plus/Pro subscription (OAuth login)
+  - Aider: API key for Anthropic or OpenAI
+
+* Installation
+
+Clone the repo and symlink the script onto your PATH:
+
+#+begin_src bash
+git clone https://github.com/utahguy/agent-sandbox.git
+ln -s "$(pwd)/agent-sandbox/agent-sandbox" ~/.local/bin/agent-sandbox
+#+end_src
+
+Create the config directory for per-agent env files:
+
+#+begin_src bash
+mkdir -p ~/.config/agent-sandbox
+#+end_src
+
+The container image builds automatically on first run.
+
+* Usage
+
+** Basic usage
+
+#+begin_src bash
+# Claude Code (default agent) in current directory
+agent-sandbox
+
+# Specify a project directory
+agent-sandbox /path/to/project
+
+# Pass arguments to the agent
+agent-sandbox -- -p "fix the failing tests"
+#+end_src
+
+** Selecting an agent
+
+#+begin_src bash
+agent-sandbox --agent claude .     # Claude Code (default)
+agent-sandbox --agent codex .      # OpenAI Codex
+agent-sandbox --agent aider .      # Aider
+#+end_src
+
+** Running as a different user
+
+For service accounts or multi-user setups:
+
+#+begin_src bash
+agent-sandbox --as arm /home/arm/project
+agent-sandbox --as arm              # defaults to that user's home dir
+#+end_src
+
+Requires sudo access to the target user. Enables systemd lingering automatically for rootless Podman.
+
+* Authentication
+
+** Claude Code
+
+Authenticate on the host first:
+
+#+begin_src bash
+claude login
+#+end_src
+
+Auth tokens (~.claude.json~, ~.credentials.json~) are mounted read-write into the container so token refreshes persist.
+
+** Codex
+
+The ~.codex/~ directory is mounted read-write. On first run, Codex will prompt you to log in inside the container. The login persists across sessions.
+
+Codex requires Node.js. Add a ~.mise.toml~ to your project:
+
+#+begin_src toml
+[tools]
+node = "22"
+#+end_src
+
+** Aider
+
+Aider authenticates via API keys. Create an env file:
+
+#+begin_src bash
+echo "ANTHROPIC_API_KEY=sk-ant-..." > ~/.config/agent-sandbox/aider.env
+# or
+echo "OPENAI_API_KEY=sk-..." > ~/.config/agent-sandbox/aider.env
+#+end_src
+
+Aider requires Python. Add a ~.mise.toml~ to your project:
+
+#+begin_src toml
+[tools]
+python = "3.12"
+#+end_src
+
+* Per-Agent Environment Files
+
+Any agent can receive extra environment variables via ~\~/.config/agent-sandbox/<agent>.env~. Each line is =KEY=VALUE=, comments start with =#=:
+
+#+begin_src conf
+# ~/.config/agent-sandbox/aider.env
+ANTHROPIC_API_KEY=sk-ant-...
+#+end_src
+
+#+begin_src conf
+# ~/.config/agent-sandbox/codex.env
+OPENAI_API_KEY=sk-...
+#+end_src
+
+* Toolchain Management with mise
+
+The container includes [[https://mise.jdx.dev/][mise]] for managing language runtimes (Python, Node.js, Rust, Go, etc.). Drop a ~.mise.toml~ in your project root:
+
+#+begin_src toml
+[tools]
+python = "3.12"
+node = "22"
+rust = "1.82"
+#+end_src
+
+The entrypoint runs ~mise install~ automatically at container start. Installed toolchains are cached on the host at =~/.local/share/agent-sandbox-mise/= and shared across all projects, so only the first install for each version downloads anything.
+
+Mise also reads idiomatic version files: ~.python-version~, ~.node-version~, ~.nvmrc~, ~.ruby-version~, ~.go-version~, ~.tool-versions~.
+
+* Per-Project Configuration
+
+Create a ~.agent-sandbox~ file in your project root for extra volume mounts and port mappings:
+
+#+begin_src conf
+# Extra volume mounts (podman -v syntax)
+/host/data:/home/claude/data:ro,Z
+~/shared-models:/models:ro,Z
+
+# Port mappings
+port: 3000
+port: 8080:80
+#+end_src
+
+For backwards compatibility, ~.claude-sandbox~ is also recognized.
+
+* What Gets Mounted
+
+| Resource           | Mount mode | Notes                                      |
+|--------------------+------------+--------------------------------------------|
+| Project directory  | read-write | Mounted at =/workspace=                    |
+| Git config         | read-only  | =~/.gitconfig=, =~/.gitignore_global=     |
+| SSH keys           | read-only  | Symlinked; =known_hosts= copied writable   |
+| GitHub CLI config  | read-only  | Copied writable at startup                 |
+| Claude auth tokens | read-write | Token refreshes persist to host            |
+| Codex auth         | read-write | Login persists to host                     |
+| Claude sessions    | read-write | Stored in =PROJECT/.claude-sessions/=      |
+| Mise cache         | read-write | Shared at =~/.local/share/agent-sandbox-mise/= |
+
+* Environment Variables
+
+| Variable               | Default          | Description                        |
+|-------------------------+------------------+------------------------------------|
+| =AGENT_SANDBOX_IMAGE=  | =agent-sandbox=  | Container image base name          |
+| =AGENT_SANDBOX_EXTRA=  | (empty)          | Additional podman args             |
+
+* Rebuilding the Image
+
+The image rebuilds automatically when ~Containerfile~ or ~entrypoint.sh~ change. To force a rebuild:
+
+#+begin_src bash
+podman rmi agent-sandbox-$(id -u)
+agent-sandbox
+#+end_src
