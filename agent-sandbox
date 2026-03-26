@@ -250,7 +250,7 @@ if [ -n "$COMPOSE_FILE" ]; then
     # Connect the sandbox to the networks used by compose services.
     # Inspect the running compose containers to find their networks.
     while IFS= read -r net; do
-        [ -z "$net" ] && [ "$net" = "podman" ] && continue
+        { [ -z "$net" ] || [ "$net" = "podman" ]; } && continue
         EXTRA_COMPOSE_ARGS+=(--network "$net")
     done < <(run_podman compose -f "$COMPOSE_FILE" ps -q 2>/dev/null \
         | xargs -r run_podman inspect --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null \
