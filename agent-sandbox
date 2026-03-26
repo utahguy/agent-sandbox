@@ -263,12 +263,17 @@ if [ -n "${AGENT_SANDBOX_EXTRA:-}" ]; then
     read -ra EXTRA_ARGS <<< "$AGENT_SANDBOX_EXTRA"
 fi
 
+# Debug: show network configuration
+if [ ${#EXTRA_COMPOSE_ARGS[@]} -gt 0 ]; then
+    echo "Connecting sandbox to networks: ${EXTRA_COMPOSE_ARGS[*]}"
+fi
+
 run_podman run --rm -it \
     --userns=keep-id \
+    "${EXTRA_COMPOSE_ARGS[@]+"${EXTRA_COMPOSE_ARGS[@]}"}" \
     "${VOLUMES[@]}" \
     "${PORTS[@]+"${PORTS[@]}"}" \
     "${AGENT_ENV[@]}" \
-    "${EXTRA_COMPOSE_ARGS[@]+"${EXTRA_COMPOSE_ARGS[@]}"}" \
     "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" \
     -e TERM="${TERM:-xterm-256color}" \
     "${IMAGE_NAME}" "${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"}"
