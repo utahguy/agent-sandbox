@@ -248,13 +248,16 @@ if [ -n "$COMPOSE_FILE" ]; then
     # Must use podman compose so services share the same runtime as the sandbox
     run_podman compose -f "$COMPOSE_FILE" up -d
     # Connect the sandbox to the networks used by compose services.
-    # Inspect the running compose containers to find their networks.
-    while IFS= read -r net; do
-        { [ -z "$net" ] || [ "$net" = "podman" ]; } && continue
-        EXTRA_COMPOSE_ARGS+=(--network "$net")
-    done < <(run_podman compose -f "$COMPOSE_FILE" ps -q 2>/dev/null \
-        | xargs -r run_podman inspect --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null \
-        | sort -u)
+    # Get container IDs, then inspect them for network names.
+    # Note: can't use xargs with run_podman since it's a shell function.
+    COMPOSE_CONTAINER_IDS="$(run_podman compose -f "$COMPOSE_FILE" ps -q 2>/dev/null)"
+    if [ -n "$COMPOSE_CONTAINER_IDS" ]; then
+        while IFS= read -r net; do
+            { [ -z "$net" ] || [ "$net" = "podman" ]; } && continue
+            EXTRA_COMPOSE_ARGS+=(--network "$net")
+        done < <(run_podman inspect --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' $COMPOSE_CONTAINER_IDS 2>/dev/null \
+            | sort -u)
+    fi
 fi
 
 # Parse any extra podman args from environment
