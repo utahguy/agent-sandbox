@@ -1,0 +1,53 @@
+FROM debian:bookworm-slim
+
+# Install minimal dependencies and GitHub CLI
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates git \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code via native installer (expensive step — cached across all UID variants)
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+    && cp /root/.local/bin/claude /usr/local/bin/claude \
+    && chmod 755 /usr/local/bin/claude
+
+# Install mise (polyglot version manager) and Python build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev \
+        libsqlite3-dev libffi-dev liblzma-dev && \
+    rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL https://mise.jdx.dev/install.sh | sh && \
+    cp /root/.local/bin/mise /usr/local/bin/mise && \
+    chmod 755 /usr/local/bin/mise
+
+# UID/GID args placed here so everything below is rebuilt when they change.
+# Podman caches layers by (command + ARG values), so a different UID/GID
+# invalidates the user-creation and chown steps automatically.
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+# Force cache bust when UID/GID change — ARG alone doesn't always invalidate
+RUN echo "Building for UID=${USER_UID} GID=${USER_GID}"
+
+# Create user with the target UID/GID
+RUN groupadd -g ${USER_GID} claude 2>/dev/null || true && \
+    useradd -m -u ${USER_UID} -g ${USER_GID} -s /bin/bash claude && \
+    mkdir -p /home/claude/.claude /home/claude/.config /home/claude/.local/state/mise /home/claude/.local/share/mise && \
+    chown -R ${USER_UID}:${USER_GID} /home/claude
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy entrypoint script
+COPY entrypoint.sh /home/claude/entrypoint.sh
+RUN chown ${USER_UID}:${USER_GID} /home/claude/entrypoint.sh && \
+    chmod +x /home/claude/entrypoint.sh
+
+USER ${USER_UID}
+ENV PATH="/home/claude/.local/bin:${PATH}"
+
+ENTRYPOINT ["/home/claude/entrypoint.sh"]

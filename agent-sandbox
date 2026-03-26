@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+# Run an AI coding agent in an unrestricted Podman container for any project.
+#
+# Usage:
+#   agent-sandbox                          # run claude (default) in current dir
+#   agent-sandbox --agent codex /path/dir  # run codex in specified dir
+#   agent-sandbox --agent aider .          # run aider in current dir
+#   agent-sandbox -- -p "do something"     # pass args to the agent
+#
+# Supported agents: claude (default), codex, aider
+#
+# Optional per-project config: .agent-sandbox in the project root.
+# Each non-empty, non-comment line is a podman volume mount flag, e.g.:
+#   /host/path:/container/path:ro,Z
+# Lines prefixed with "port:" map container ports to the host, e.g.:
+#   port: 3000
+#   port: 8080:80
+#
+# Per-agent env vars: ~/.config/agent-sandbox/<agent>.env
+# Each line is KEY=VALUE, passed into the container. Use for API keys.
+#
+# Environment variables:
+#   AGENT_SANDBOX_IMAGE  - image base name (default: agent-sandbox)
+#   AGENT_SANDBOX_EXTRA  - additional podman args (space-separated)
+#
+# Run as a different user (requires sudo access to that user):
+#   agent-sandbox --as arm /home/arm
+#   agent-sandbox --as arm              # defaults to that user's home dir
+
+set -euo pipefail
+
+# Resolve the directory containing this script (works through symlinks)
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+CONTAINER_DIR="${SCRIPT_DIR}/container"
+RUN_AS_USER=""
+SANDBOX_AGENT="claude"
+
+# Parse our flags first, then project dir / agent args
+PROJECT_DIR=""
+AGENT_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --agent)
+            SANDBOX_AGENT="$2"
+            shift 2
+            ;;
+        --as)
+            RUN_AS_USER="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            AGENT_ARGS=("$@")
+            break
+            ;;
+        -*)
+            AGENT_ARGS=("$@")
+            break
+            ;;
+        *)
+            if [ -z "$PROJECT_DIR" ]; then
+                PROJECT_DIR="$1"
+            else
+                AGENT_ARGS+=("$1")
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Resolve target UID/GID
+if [ -n "$RUN_AS_USER" ]; then
+    TARGET_UID="$(id -u "$RUN_AS_USER")"
+    TARGET_GID="$(id -g "$RUN_AS_USER")"
+    TARGET_HOME="$(eval echo "~${RUN_AS_USER}")"
+    PROJECT_DIR="${PROJECT_DIR:-$TARGET_HOME}"
+
+    # Rootless podman needs a systemd user session. For service accounts
+    # that never log in interactively, lingering must be enabled.
+    if ! [ -f "/var/lib/systemd/linger/${RUN_AS_USER}" ]; then
+        echo "Enabling systemd lingering for ${RUN_AS_USER} (required for rootless podman)..."
+        sudo loginctl enable-linger "$RUN_AS_USER"
+    fi
+else
+    TARGET_UID="$(id -u)"
+    TARGET_GID="$(id -g)"
+    TARGET_HOME="$HOME"
+fi
+
+PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
+
+IMAGE_NAME="${AGENT_SANDBOX_IMAGE:-agent-sandbox}-${TARGET_UID}"
+
+# --- Helper: run podman as the right user ---
+run_podman() {
+    if [ -n "$RUN_AS_USER" ]; then
+        sudo -u "$RUN_AS_USER" podman "$@"
+    else
+        podman "$@"
+    fi
+}
+
+# Build the image if it doesn't exist or source files changed
+NEEDS_BUILD=false
+if ! run_podman image exists "${IMAGE_NAME}"; then
+    NEEDS_BUILD=true
+elif [ "${CONTAINER_DIR}/Containerfile" -nt "$(run_podman image inspect "${IMAGE_NAME}" --format '{{.Created}}' 2>/dev/null || echo 0)" ]; then
+    NEEDS_BUILD=true
+elif [ "${CONTAINER_DIR}/entrypoint.sh" -nt "$(run_podman image inspect "${IMAGE_NAME}" --format '{{.Created}}' 2>/dev/null || echo 0)" ]; then
+    NEEDS_BUILD=true
+fi
+
+if $NEEDS_BUILD; then
+    echo "Building container image..."
+    run_podman build \
+        --build-arg USER_UID="${TARGET_UID}" \
+        --build-arg USER_GID="${TARGET_GID}" \
+        -t "${IMAGE_NAME}" \
+        -f "${CONTAINER_DIR}/Containerfile" \
+        "${CONTAINER_DIR}"
+fi
+
+# --- Prepare settings in a temp dir (read-only inside container) ---
+AUTH_TMPDIR="$(mktemp -d)"
+cleanup() { rm -rf "$AUTH_TMPDIR"; }
+trap cleanup EXIT
+
+if [ -f "${HOME}/.claude/settings.json" ]; then
+    cp "${HOME}/.claude/settings.json" "${AUTH_TMPDIR}/settings.json"
+    chmod 644 "${AUTH_TMPDIR}/settings.json"
+fi
+
+# Make temp dir traversable
+chmod 755 "$AUTH_TMPDIR"
+
+# Assemble volume mounts
+VOLUMES=(
+    -v "${PROJECT_DIR}:/workspace:Z"
+)
+
+# --- Agent-specific auth ---
+AGENT_ENV=(-e "SANDBOX_AGENT=${SANDBOX_AGENT}")
+
+case "$SANDBOX_AGENT" in
+    claude)
+        # Auth tokens — mounted read-write so token refreshes persist back to the host
+        [ -f "${HOME}/.claude.json" ]              && VOLUMES+=(-v "${HOME}/.claude.json:/home/claude/.claude.json:Z")
+        [ -f "${HOME}/.claude/.credentials.json" ] && VOLUMES+=(-v "${HOME}/.claude/.credentials.json:/home/claude/.claude/.credentials.json:Z")
+        # Settings — read-only via temp copy (protects against container writes)
+        [ -f "${AUTH_TMPDIR}/settings.json" ]      && VOLUMES+=(-v "${AUTH_TMPDIR}/settings.json:/tmp/claude-settings-src:ro,Z")
+        # Session persistence — store in the project directory so /resume works
+        SESSION_DIR="${PROJECT_DIR}/.claude-sessions"
+        mkdir -p "${SESSION_DIR}/projects" "${SESSION_DIR}/sessions"
+        VOLUMES+=(-v "${SESSION_DIR}/projects:/home/claude/.claude/projects:Z")
+        VOLUMES+=(-v "${SESSION_DIR}/sessions:/home/claude/.claude/sessions:Z")
+        ;;
+    codex)
+        # Codex auth — mount read-write so login persists
+        mkdir -p "${TARGET_HOME}/.codex"
+        VOLUMES+=(-v "${TARGET_HOME}/.codex:/home/claude/.codex:Z")
+        ;;
+    aider)
+        # Aider uses API keys only — no persistent auth files needed
+        ;;
+    *)
+        echo "Unknown agent: ${SANDBOX_AGENT}" >&2
+        echo "Supported agents: claude, codex, aider" >&2
+        exit 1
+        ;;
+esac
+
+# Load per-agent env file (API keys, etc.)
+AGENT_ENV_FILE="${TARGET_HOME}/.config/agent-sandbox/${SANDBOX_AGENT}.env"
+if [ -f "${AGENT_ENV_FILE}" ]; then
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(echo "$line" | xargs)"
+        [ -z "$line" ] && continue
+        AGENT_ENV+=(-e "$line")
+    done < "${AGENT_ENV_FILE}"
+fi
+
+# Git config — mount read-only so the container can't corrupt it
+[ -f "${TARGET_HOME}/.gitconfig" ]        && VOLUMES+=(-v "${TARGET_HOME}/.gitconfig:/home/claude/.gitconfig:ro,Z")
+[ -f "${TARGET_HOME}/.gitignore_global" ] && VOLUMES+=(-v "${TARGET_HOME}/.gitignore_global:/home/claude/.gitignore_global:ro,Z")
+
+# SSH keys & config — read-only; entrypoint copies known_hosts to a writable location
+[ -d "${TARGET_HOME}/.ssh" ] && VOLUMES+=(-v "${TARGET_HOME}/.ssh:/home/claude/.ssh-host:ro,Z")
+
+# GitHub CLI config — read-only; entrypoint copies to a writable location
+GH_CONFIG_DIR="${TARGET_HOME}/.config/gh"
+# Snap installs store gh config elsewhere; find the actual location
+if [ ! -d "${GH_CONFIG_DIR}" ] && [ -d "${TARGET_HOME}/snap/gh" ]; then
+    GH_CONFIG_DIR="$(find "${TARGET_HOME}/snap/gh" -path "*/.config/gh" -type d 2>/dev/null | head -1)"
+fi
+[ -n "${GH_CONFIG_DIR:-}" ] && [ -d "${GH_CONFIG_DIR}" ] && \
+    VOLUMES+=(-v "${GH_CONFIG_DIR}:/home/claude/.config/gh-host:ro,Z")
+
+# Mise tool cache — shared across all projects so installed runtimes persist
+MISE_DIR="${TARGET_HOME}/.local/share/agent-sandbox-mise"
+mkdir -p "${MISE_DIR}"
+VOLUMES+=(-v "${MISE_DIR}:/home/claude/.local/share/mise:Z")
+
+# Read per-project extra mounts and port mappings from .agent-sandbox
+PORTS=()
+for config_file in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandbox"; do
+    if [ -f "${config_file}" ]; then
+        while IFS= read -r line; do
+            # Skip empty lines and comments
+            line="${line%%#*}"
+            line="$(echo "$line" | xargs)"
+            [ -z "$line" ] && continue
+            # Port mappings: lines starting with "port:"
+            if [[ "$line" =~ ^port:[[:space:]]*(.*) ]]; then
+                PORTS+=(-p "${BASH_REMATCH[1]}")
+                continue
+            fi
+            # Expand ~ to $HOME
+            line="${line/#\~/$HOME}"
+            VOLUMES+=(-v "$line")
+        done < "${config_file}"
+        break  # use first found config file
+    fi
+done
+
+# Parse any extra podman args from environment
+EXTRA_ARGS=()
+if [ -n "${AGENT_SANDBOX_EXTRA:-}" ]; then
+    read -ra EXTRA_ARGS <<< "$AGENT_SANDBOX_EXTRA"
+fi
+
+run_podman run --rm -it \
+    --userns=keep-id \
+    "${VOLUMES[@]}" \
+    "${PORTS[@]+"${PORTS[@]}"}" \
+    "${AGENT_ENV[@]}" \
+    "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" \
+    -e TERM="${TERM:-xterm-256color}" \
+    "${IMAGE_NAME}" "${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"}"
