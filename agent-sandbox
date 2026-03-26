@@ -235,7 +235,12 @@ for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
 done
 if [ -n "$COMPOSE_FILE" ]; then
     echo "Starting project services ($(basename "$COMPOSE_FILE"))..."
-    run_podman compose -f "$COMPOSE_FILE" up -d
+    # Prefer docker compose v2 over podman compose (which may delegate to v1)
+    if docker compose version &>/dev/null; then
+        docker compose -f "$COMPOSE_FILE" up -d
+    else
+        run_podman compose -f "$COMPOSE_FILE" up -d
+    fi
     # Connect the sandbox to the compose network so it can reach services
     COMPOSE_PROJECT="$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')"
     COMPOSE_NETWORK="${COMPOSE_PROJECT}_default"
