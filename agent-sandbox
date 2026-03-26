@@ -234,6 +234,16 @@ for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
     fi
 done
 if [ -n "$COMPOSE_FILE" ]; then
+    # Ensure the Podman socket is running (required by the compose provider)
+    if [ -z "$RUN_AS_USER" ]; then
+        if ! systemctl --user is-active podman.socket &>/dev/null; then
+            systemctl --user start podman.socket
+        fi
+    else
+        if ! sudo -u "$RUN_AS_USER" systemctl --user is-active podman.socket &>/dev/null; then
+            sudo -u "$RUN_AS_USER" systemctl --user start podman.socket
+        fi
+    fi
     echo "Starting project services ($(basename "$COMPOSE_FILE"))..."
     # Must use podman compose so services share the same runtime as the sandbox
     run_podman compose -f "$COMPOSE_FILE" up -d
