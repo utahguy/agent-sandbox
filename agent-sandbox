@@ -235,9 +235,19 @@ for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
 done
 if [ -n "$COMPOSE_FILE" ]; then
     echo "Starting project services ($(basename "$COMPOSE_FILE"))..."
-    # Prefer docker compose v2 over podman compose (which may delegate to v1)
-    if docker compose version &>/dev/null; then
-        docker compose -f "$COMPOSE_FILE" up -d
+    # Must use podman compose so services share the same runtime as the sandbox.
+    # Point COMPOSE_PROVIDER at docker-compose v2 binary to avoid podman
+    # delegating to the old v1 /usr/bin/docker-compose.
+    COMPOSE_PROVIDER=""
+    for p in /usr/libexec/docker/cli-plugins/docker-compose \
+             /usr/lib/docker/cli-plugins/docker-compose; do
+        if [ -x "$p" ]; then
+            COMPOSE_PROVIDER="$p"
+            break
+        fi
+    done
+    if [ -n "$COMPOSE_PROVIDER" ]; then
+        COMPOSE_PROVIDER="$COMPOSE_PROVIDER" run_podman compose -f "$COMPOSE_FILE" up -d
     else
         run_podman compose -f "$COMPOSE_FILE" up -d
     fi
@@ -246,8 +256,6 @@ if [ -n "$COMPOSE_FILE" ]; then
     COMPOSE_NETWORK="${COMPOSE_PROJECT}_default"
     if run_podman network exists "$COMPOSE_NETWORK" 2>/dev/null; then
         EXTRA_COMPOSE_ARGS=(--network "$COMPOSE_NETWORK")
-    else
-        EXTRA_COMPOSE_ARGS=()
     fi
 fi
 
