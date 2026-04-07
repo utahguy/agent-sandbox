@@ -10,8 +10,8 @@
 # Supported agents: claude (default), codex, aider
 #
 # Optional per-project config: .agent-sandbox in the project root.
-# Each non-empty, non-comment line is a podman volume mount flag, e.g.:
-#   /host/path:/container/path:ro,Z
+# Lines prefixed with "volume:" add extra volume mounts, e.g.:
+#   volume: /host/path:/container/path:ro,Z
 # Lines prefixed with "port:" map container ports to the host, e.g.:
 #   port: 3000
 #   port: 8080:80
@@ -216,7 +216,15 @@ for config_file in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandb
                 PORTS+=(-p "${BASH_REMATCH[1]}")
                 continue
             fi
-            # Expand ~ to $HOME
+            # Volume mounts: lines starting with "volume:"
+            if [[ "$line" =~ ^volume:[[:space:]]*(.*) ]]; then
+                vol="${BASH_REMATCH[1]}"
+                vol="${vol/#\~/$HOME}"
+                VOLUMES+=(-v "$vol")
+                continue
+            fi
+            # Deprecated bare volume mount (no "volume:" prefix)
+            echo "Warning: bare volume mount in ${config_file} is deprecated; use 'volume: ${line}' instead" >&2
             line="${line/#\~/$HOME}"
             VOLUMES+=(-v "$line")
         done < "${config_file}"

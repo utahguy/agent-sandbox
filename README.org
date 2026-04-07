@@ -144,8 +144,8 @@ Create a ~.agent-sandbox~ file in your project root for extra volume mounts and 
 
 #+begin_src conf
 # Extra volume mounts (podman -v syntax)
-/host/data:/home/claude/data:ro,Z
-~/shared-models:/models:ro,Z
+volume: /host/data:/home/claude/data:ro,Z
+volume: ~/shared-models:/models:ro,Z
 
 # Port mappings
 port: 3000
