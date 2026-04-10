@@ -191,6 +191,8 @@ Since the whole project directory is mounted into the container, dropping any of
 ln -s CLAUDE.md AGENTS.md
 #+end_src
 
+/Note: only the Claude Code path (=CLAUDE.md=) has been tested. The Codex and Aider entries are based on general knowledge of those tools, not actual verification inside agent-sandbox. Please confirm before relying on them./
+
 ** Multi-line input
 
 Most terminals send the same bytes for =Enter= and =Shift+Enter=, so =Shift+Enter= can't be used to insert a newline without terminal-specific configuration. Two keys that work in most terminals without any setup:
