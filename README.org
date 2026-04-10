@@ -203,6 +203,55 @@ Most terminals send the same bytes for =Enter= and =Shift+Enter=, so =Shift+Ente
 
 This is a terminal-level behavior, not agent-specific.
 
+* Troubleshooting
+
+** =can't raise ambient capability CAP_*= during image build
+
+Example:
+
+#+begin_example
+STEP 8/14: RUN groupadd -g ${USER_GID} claude ...
+time="..." level=warning msg="can't raise ambient capability CAP_CHOWN: operation not permitted"
+time="..." level=warning msg="can't raise ambient capability CAP_DAC_OVERRIDE: operation not permitted"
+...
+--> cb1b1e2056ae
+#+end_example
+
+These come from rootless Buildah/crun during =RUN= steps. The build completes successfully — a new layer ID is printed after each warning block — so the image is fine. The warnings are cosmetic and depend on your host's runtime version and kernel.
+
+To silence them, either set =BUILDAH_ISOLATION=chroot= in your shell:
+
+#+begin_src bash
+export BUILDAH_ISOLATION=chroot
+#+end_src
+
+or upgrade =crun=:
+
+#+begin_src bash
+crun --version
+sudo apt install --only-upgrade crun
+#+end_src
+
+** =Executing external compose provider "...docker-compose"=
+
+This is Podman informing you that =podman compose= is delegating to your installed =docker-compose= binary. It is benign — Podman's compose support is a thin wrapper around whichever compose provider is configured.
+
+To silence, add the following to =~/.config/containers/containers.conf= (create the file if it doesn't exist):
+
+#+begin_src toml
+[engine]
+compose_warning_logs = false
+#+end_src
+
+** =mise ERROR ... Permission denied= under =~/.cache/mise=
+
+Fixed in the Containerfile as of commit =ad01425=. If you still see this, force a rebuild:
+
+#+begin_src bash
+podman rmi agent-sandbox-$(id -u)
+agent-sandbox
+#+end_src
+
 * Rebuilding the Image
 
 The image rebuilds automatically when ~Containerfile~ or ~entrypoint.sh~ change. To force a rebuild:
