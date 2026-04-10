@@ -202,6 +202,16 @@ MISE_DIR="${TARGET_HOME}/.local/share/agent-sandbox-mise"
 mkdir -p "${MISE_DIR}"
 VOLUMES+=(-v "${MISE_DIR}:/home/claude/.local/share/mise:Z")
 
+# uv cache — shared with the host so switching between container and host
+# for Python work doesn't re-download or re-build wheels. Host path is
+# platform-specific; container path is always ~/.cache/uv.
+case "$(uname -s)" in
+    Darwin) UV_CACHE_HOST="${TARGET_HOME}/Library/Caches/uv" ;;
+    *)      UV_CACHE_HOST="${TARGET_HOME}/.cache/uv" ;;
+esac
+mkdir -p "${UV_CACHE_HOST}"
+VOLUMES+=(-v "${UV_CACHE_HOST}:/home/claude/.cache/uv:Z")
+
 # Read per-project extra mounts and port mappings from .agent-sandbox
 PORTS=()
 for config_file in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandbox"; do

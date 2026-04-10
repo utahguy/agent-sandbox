@@ -166,6 +166,7 @@ For backwards compatibility, ~.claude-sandbox~ is also recognized.
 | Codex auth         | read-write | Login persists to host                     |
 | Claude sessions    | read-write | Stored in =PROJECT/.claude-sessions/=      |
 | Mise cache         | read-write | Shared at =~/.local/share/agent-sandbox-mise/= |
+| uv cache           | read-write | Host =~/.cache/uv= (Linux/WSL) or =~/Library/Caches/uv= (macOS) |
 
 * Environment Variables
 
