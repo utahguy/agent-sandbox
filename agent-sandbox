@@ -188,6 +188,16 @@ fi
 # SSH keys & config — read-only; entrypoint copies known_hosts to a writable location
 [ -d "${TARGET_HOME}/.ssh" ] && VOLUMES+=(-v "${TARGET_HOME}/.ssh:/home/claude/.ssh-host:ro,Z")
 
+# SSH agent forwarding — if the host has an agent running, mount its socket
+# so passphrase-protected keys work inside the container without the
+# passphrase ever being typed in (or cached) in the container.
+# Skipped for --as runs: $SSH_AUTH_SOCK belongs to the invoking user, not
+# the target user, so the socket would be unreadable and misleading.
+if [ -z "$RUN_AS_USER" ] && [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
+    VOLUMES+=(-v "${SSH_AUTH_SOCK}:/run/host-ssh-agent.sock")
+    AGENT_ENV+=(-e "SSH_AUTH_SOCK=/run/host-ssh-agent.sock")
+fi
+
 # GitHub CLI config — read-only; entrypoint copies to a writable location
 GH_CONFIG_DIR="${TARGET_HOME}/.config/gh"
 # Snap installs store gh config elsewhere; find the actual location

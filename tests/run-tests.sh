@@ -64,6 +64,8 @@ EOF
 
     export HOME="$TEST_HOME"
     export PATH="${TEST_BIN}:${PATH}"
+    # Ensure each test starts without a real ssh-agent leaking in
+    unset SSH_AUTH_SOCK
 }
 
 teardown_test() {
@@ -274,6 +276,46 @@ test_git_config_mounted_readonly() {
     assert_volume "${TEST_HOME}/.gitconfig:/home/claude/.gitconfig:ro,Z" || return 1
 }
 
+test_ssh_agent_forwarded_when_available() {
+    # Start a real ssh-agent bound to a known socket path
+    local sock="${TEST_TMP}/agent.sock"
+    local agent_env
+    agent_env="$(ssh-agent -a "$sock" 2>/dev/null)" || {
+        echo "    could not start ssh-agent"
+        return 1
+    }
+    local agent_pid
+    agent_pid="$(echo "$agent_env" | sed -n 's/.*SSH_AGENT_PID=\([0-9]*\).*/\1/p')"
+    [ -S "$sock" ] || { echo "    ssh-agent did not create socket"; kill "$agent_pid" 2>/dev/null; return 1; }
+
+    export SSH_AUTH_SOCK="$sock"
+    local rc=0
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || rc=1
+    [ "$rc" -eq 0 ] && { assert_volume "${sock}:/run/host-ssh-agent.sock" || rc=1; }
+    [ "$rc" -eq 0 ] && { assert_arg "SSH_AUTH_SOCK=/run/host-ssh-agent.sock" || rc=1; }
+
+    kill "$agent_pid" 2>/dev/null
+    return "$rc"
+}
+
+test_ssh_agent_skipped_when_unset() {
+    unset SSH_AUTH_SOCK
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    refute_arg "SSH_AUTH_SOCK=/run/host-ssh-agent.sock" || return 1
+    # The mount target should also not appear
+    if grep -F ":/run/host-ssh-agent.sock" "$PODMAN_LOG" >/dev/null 2>&1; then
+        echo "    ssh agent socket mounted unexpectedly"
+        return 1
+    fi
+}
+
+test_ssh_agent_skipped_when_socket_missing() {
+    # SSH_AUTH_SOCK points to a nonexistent path
+    export SSH_AUTH_SOCK="${TEST_TMP}/nonexistent.sock"
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    refute_arg "SSH_AUTH_SOCK=/run/host-ssh-agent.sock" || return 1
+}
+
 test_claude_sessions_dir_created_in_project() {
     "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
     [ -d "${TEST_PROJECT}/.claude-sessions/projects" ] || {
@@ -317,6 +359,9 @@ run_test "args after -- passed to agent"               test_agent_args_after_das
 run_test "claude auth files mounted when present"     test_claude_auth_mounted_if_present
 run_test "claude auth not mounted when absent"        test_claude_auth_skipped_if_absent
 run_test "git config mounted read-only"                test_git_config_mounted_readonly
+run_test "ssh agent forwarded when SSH_AUTH_SOCK set"  test_ssh_agent_forwarded_when_available
+run_test "ssh agent not forwarded when unset"          test_ssh_agent_skipped_when_unset
+run_test "ssh agent not forwarded when socket missing" test_ssh_agent_skipped_when_socket_missing
 run_test ".claude-sessions dir created in project"    test_claude_sessions_dir_created_in_project
 run_test "--userns=keep-id is passed to podman run"   test_userns_keep_id_flag
 

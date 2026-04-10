@@ -161,6 +161,7 @@ For backwards compatibility, ~.claude-sandbox~ is also recognized.
 | Project directory  | read-write | Mounted at =/workspace=                    |
 | Git config         | read-only  | =~/.gitconfig=, =~/.gitignore_global=     |
 | SSH keys           | read-only  | Symlinked; =known_hosts= copied writable   |
+| SSH agent socket   | read-write | Forwarded via =$SSH_AUTH_SOCK= when set on host |
 | GitHub CLI config  | read-only  | Copied writable at startup                 |
 | Claude auth tokens | read-write | Token refreshes persist to host            |
 | Codex auth         | read-write | Login persists to host                     |
