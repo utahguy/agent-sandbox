@@ -177,6 +177,20 @@ For backwards compatibility, ~.claude-sandbox~ is also recognized.
 
 * Tips
 
+** Injecting context into the agent
+
+Each agent reads its own convention-named file from the project root:
+
+- *Claude Code* reads =CLAUDE.md=
+- *Codex* reads =AGENTS.md=
+- *Aider* reads =CONVENTIONS.md= (via =--read=)
+
+Since the whole project directory is mounted into the container, dropping any of these files in your project root is all that's needed — agent-sandbox does nothing special with them. If you want the same context across multiple agents, symlink one to the other:
+
+#+begin_src bash
+ln -s CLAUDE.md AGENTS.md
+#+end_src
+
 ** Multi-line input
 
 Most terminals send the same bytes for =Enter= and =Shift+Enter=, so =Shift+Enter= can't be used to insert a newline without terminal-specific configuration. Two keys that work in most terminals without any setup:
