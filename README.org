@@ -175,6 +175,17 @@ For backwards compatibility, ~.claude-sandbox~ is also recognized.
 | =AGENT_SANDBOX_IMAGE=  | =agent-sandbox=  | Container image base name          |
 | =AGENT_SANDBOX_EXTRA=  | (empty)          | Additional podman args             |
 
+* Tips
+
+** Multi-line input
+
+Most terminals send the same bytes for =Enter= and =Shift+Enter=, so =Shift+Enter= can't be used to insert a newline without terminal-specific configuration. Two keys that work in most terminals without any setup:
+
+- =Ctrl+J= — sends LF (=\n=), distinct from Enter's CR (=\r=)
+- =Alt+Enter= — sends =ESC= followed by =\r=
+
+This is a terminal-level behavior, not agent-specific.
+
 * Rebuilding the Image
 
 The image rebuilds automatically when ~Containerfile~ or ~entrypoint.sh~ change. To force a rebuild:
