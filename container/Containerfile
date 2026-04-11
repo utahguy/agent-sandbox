@@ -24,6 +24,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cp /root/.local/bin/mise /usr/local/bin/mise && \
     chmod 755 /usr/local/bin/mise
 
+# Install PDF toolkit. poppler-utils provides pdftotext / pdftoppm / pdfinfo /
+# pdfimages / pdftocairo / pdfunite / pdfseparate / pdffonts / pdfsig and is
+# the de-facto Linux CLI PDF toolkit — Claude Code's Read tool shells out to
+# pdftoppm for PDF rendering, and many third-party tools (pandoc, pdf2image,
+# ImageMagick's PDF delegate, ocrmypdf) expect poppler to be present. qpdf
+# complements it with structural manipulation (split/merge/linearize/JSON
+# structure dump). Combined footprint: ~25 MB installed.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        poppler-utils qpdf \
+    && rm -rf /var/lib/apt/lists/*
+
 # UID/GID args placed here so everything below is rebuilt when they change.
 # Podman caches layers by (command + ARG values), so a different UID/GID
 # invalidates the user-creation and chown steps automatically.
