@@ -203,6 +203,14 @@ Most terminals send the same bytes for =Enter= and =Shift+Enter=, so =Shift+Ente
 
 This is a terminal-level behavior, not agent-specific.
 
+* Running Tests
+
+#+begin_src bash
+./tests/run-tests.sh
+#+end_src
+
+The tests stub out =podman=, =systemctl=, and =uname= so nothing touches the container runtime. They capture the final =podman run= argv and assert on it. No Podman installation is required.
+
 * Troubleshooting
 
 ** =can't raise ambient capability CAP_*= during image build
