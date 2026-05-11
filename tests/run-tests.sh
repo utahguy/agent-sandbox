@@ -333,6 +333,121 @@ test_userns_keep_id_flag() {
     assert_arg "--userns=keep-id" || return 1
 }
 
+# --- Per-project container tests ---------------------------------------------
+
+# Helper: replace fake podman with one that also logs build calls.
+# Sets BUILD_LOG to the path where build argv is captured.
+setup_build_logging_podman() {
+    BUILD_LOG="${TEST_TMP}/build.log"
+    cat > "${TEST_BIN}/podman" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+    image)
+        case "\$2" in
+            exists)
+                # Check if we should pretend the project image is missing
+                if [ -f "${TEST_TMP}/image_missing" ] && echo "\$3" | grep -qv "^agent-sandbox-"; then
+                    exit 0
+                fi
+                if [ -f "${TEST_TMP}/image_missing" ]; then
+                    exit 1
+                fi
+                exit 0
+                ;;
+            inspect) echo "2026-01-01T00:00:00Z" ;;
+        esac
+        exit 0
+        ;;
+    build)
+        printf '%s\n' "\$@" > "${BUILD_LOG}"
+        exit 0
+        ;;
+    compose)  exit 0 ;;
+    inspect)  exit 0 ;;
+    run)
+        shift
+        printf '%s\n' "\$@" > "${PODMAN_LOG}"
+        exit 0
+        ;;
+esac
+exit 0
+EOF
+    chmod +x "${TEST_BIN}/podman"
+}
+
+test_no_project_containerfile_unchanged() {
+    # No Containerfile or Dockerfile in project — base image used, no project build
+    setup_build_logging_podman
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    # The image name used for `run` should be the base, not a derived one
+    local project_name
+    project_name="$(basename "$TEST_PROJECT")"
+    refute_arg "agent-sandbox-$(id -u)-${project_name}" || return 1
+}
+
+test_project_containerfile_builds_derived_image() {
+    echo "RUN echo test" > "${TEST_PROJECT}/Containerfile"
+    touch -t 202701010000 "${TEST_TMP}/image_missing"
+    setup_build_logging_podman
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    [ -f "$BUILD_LOG" ] || { echo "    podman build was not invoked"; return 1; }
+    # Build should reference BASE_IMAGE
+    grep -qF "BASE_IMAGE=" "$BUILD_LOG" || { echo "    BASE_IMAGE arg missing from build"; return 1; }
+    # Build should use the project Containerfile
+    grep -qF "${TEST_PROJECT}/Containerfile" "$BUILD_LOG" || {
+        echo "    build did not use project Containerfile"; return 1
+    }
+}
+
+test_project_dockerfile_used_when_no_containerfile() {
+    echo "RUN echo test" > "${TEST_PROJECT}/Dockerfile"
+    touch -t 202701010000 "${TEST_TMP}/image_missing"
+    setup_build_logging_podman
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    [ -f "$BUILD_LOG" ] || { echo "    podman build was not invoked"; return 1; }
+    grep -qF "${TEST_PROJECT}/Dockerfile" "$BUILD_LOG" || {
+        echo "    build did not use project Dockerfile"; return 1
+    }
+}
+
+test_project_containerfile_preferred_over_dockerfile() {
+    echo "RUN echo containerfile" > "${TEST_PROJECT}/Containerfile"
+    echo "RUN echo dockerfile" > "${TEST_PROJECT}/Dockerfile"
+    touch -t 202701010000 "${TEST_TMP}/image_missing"
+    setup_build_logging_podman
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    [ -f "$BUILD_LOG" ] || { echo "    podman build was not invoked"; return 1; }
+    grep -qF "${TEST_PROJECT}/Containerfile" "$BUILD_LOG" || {
+        echo "    build did not prefer Containerfile over Dockerfile"; return 1
+    }
+}
+
+test_derived_image_used_for_run() {
+    echo "RUN echo test" > "${TEST_PROJECT}/Containerfile"
+    touch -t 202701010000 "${TEST_TMP}/image_missing"
+    setup_build_logging_podman
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    # The podman run log should contain the derived image name
+    local project_name
+    project_name="$(basename "$TEST_PROJECT")"
+    assert_arg "agent-sandbox-$(id -u)-${project_name}" || return 1
+}
+
+test_no_containerfile_falls_back_to_base() {
+    # Simulates: project Containerfile was deleted
+    # No Containerfile or Dockerfile present
+    setup_build_logging_podman
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    # Build log may exist from the base image build, but it should NOT
+    # reference a project-derived image name
+    local project_name
+    project_name="$(basename "$TEST_PROJECT")"
+    if [ -f "$BUILD_LOG" ] && grep -qF -- "-${project_name}" "$BUILD_LOG"; then
+        echo "    unexpected project-specific build triggered"
+        return 1
+    fi
+}
+
 # --- Run all -----------------------------------------------------------------
 
 echo "Running agent-sandbox tests..."
@@ -364,6 +479,12 @@ run_test "ssh agent not forwarded when unset"          test_ssh_agent_skipped_wh
 run_test "ssh agent not forwarded when socket missing" test_ssh_agent_skipped_when_socket_missing
 run_test ".claude-sessions dir created in project"    test_claude_sessions_dir_created_in_project
 run_test "--userns=keep-id is passed to podman run"   test_userns_keep_id_flag
+run_test "no project Containerfile — behavior unchanged"      test_no_project_containerfile_unchanged
+run_test "project Containerfile triggers derived build"       test_project_containerfile_builds_derived_image
+run_test "project Dockerfile used when no Containerfile"      test_project_dockerfile_used_when_no_containerfile
+run_test "project Containerfile preferred over Dockerfile"    test_project_containerfile_preferred_over_dockerfile
+run_test "derived image name used for podman run"             test_derived_image_used_for_run
+run_test "no Containerfile falls back to base image"          test_no_containerfile_falls_back_to_base
 
 echo
 if [ "$FAIL" -eq 0 ]; then

@@ -121,6 +121,47 @@ if $NEEDS_BUILD; then
         "${CONTAINER_DIR}"
 fi
 
+# --- Per-project container customization ---
+# If the project has its own Containerfile or Dockerfile, build a derived
+# image that extends the base. This lets projects add their own system
+# dependencies (e.g., Chromium for Playwright E2E testing) without
+# modifying the agent-sandbox base image.
+PROJECT_CONTAINER_FILE=""
+if [ -f "${PROJECT_DIR}/Containerfile" ]; then
+    PROJECT_CONTAINER_FILE="${PROJECT_DIR}/Containerfile"
+elif [ -f "${PROJECT_DIR}/Dockerfile" ]; then
+    PROJECT_CONTAINER_FILE="${PROJECT_DIR}/Dockerfile"
+fi
+
+if [ -n "$PROJECT_CONTAINER_FILE" ]; then
+    PROJECT_NAME="$(basename "$PROJECT_DIR")"
+    PROJECT_IMAGE_NAME="${IMAGE_NAME}-${PROJECT_NAME}"
+
+    PROJECT_NEEDS_BUILD=false
+    if ! run_podman image exists "${PROJECT_IMAGE_NAME}"; then
+        PROJECT_NEEDS_BUILD=true
+    elif [ "$PROJECT_CONTAINER_FILE" -nt "$(run_podman image inspect "${PROJECT_IMAGE_NAME}" --format '{{.Created}}' 2>/dev/null || echo 0)" ]; then
+        PROJECT_NEEDS_BUILD=true
+    elif $NEEDS_BUILD; then
+        # Base image was rebuilt — derived image must also rebuild
+        PROJECT_NEEDS_BUILD=true
+    fi
+
+    if $PROJECT_NEEDS_BUILD; then
+        echo "Building project-specific image from ${PROJECT_CONTAINER_FILE}..."
+        run_podman build \
+            --build-arg USER_UID="${TARGET_UID}" \
+            --build-arg USER_GID="${TARGET_GID}" \
+            --build-arg BASE_IMAGE="${IMAGE_NAME}" \
+            -t "${PROJECT_IMAGE_NAME}" \
+            -f "$PROJECT_CONTAINER_FILE" \
+            "${PROJECT_DIR}"
+    fi
+
+    # Use the project-specific image for the container
+    IMAGE_NAME="${PROJECT_IMAGE_NAME}"
+fi
+
 # --- Prepare settings in a temp dir (read-only inside container) ---
 AUTH_TMPDIR="$(mktemp -d)"
 cleanup() { rm -rf "$AUTH_TMPDIR"; }
