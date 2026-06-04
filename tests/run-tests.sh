@@ -433,6 +433,34 @@ test_derived_image_used_for_run() {
     assert_arg "agent-sandbox-$(id -u)-${project_name}" || return 1
 }
 
+test_env_directive() {
+    echo "env: SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T/B/xxx" > "${TEST_PROJECT}/.agent-sandbox"
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    assert_arg "SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T/B/xxx" || return 1
+}
+
+test_env_directive_multiple() {
+    cat > "${TEST_PROJECT}/.agent-sandbox" <<EOF
+env: FOO=bar
+env: BAZ=qux
+EOF
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    assert_arg "FOO=bar" || return 1
+    assert_arg "BAZ=qux" || return 1
+}
+
+test_env_directive_with_other_directives() {
+    cat > "${TEST_PROJECT}/.agent-sandbox" <<EOF
+port: 3000
+env: MY_VAR=hello
+volume: /tmp/foo:/tmp/bar
+EOF
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    assert_arg "3000" || return 1
+    assert_arg "MY_VAR=hello" || return 1
+    assert_volume "/tmp/foo:/tmp/bar" || return 1
+}
+
 test_no_containerfile_falls_back_to_base() {
     # Simulates: project Containerfile was deleted
     # No Containerfile or Dockerfile present
@@ -479,6 +507,9 @@ run_test "ssh agent not forwarded when unset"          test_ssh_agent_skipped_wh
 run_test "ssh agent not forwarded when socket missing" test_ssh_agent_skipped_when_socket_missing
 run_test ".claude-sessions dir created in project"    test_claude_sessions_dir_created_in_project
 run_test "--userns=keep-id is passed to podman run"   test_userns_keep_id_flag
+run_test "env: directive sets env var"                        test_env_directive
+run_test "env: directive multiple vars"                      test_env_directive_multiple
+run_test "env: directive with port: and volume:"             test_env_directive_with_other_directives
 run_test "no project Containerfile — behavior unchanged"      test_no_project_containerfile_unchanged
 run_test "project Containerfile triggers derived build"       test_project_containerfile_builds_derived_image
 run_test "project Dockerfile used when no Containerfile"      test_project_dockerfile_used_when_no_containerfile

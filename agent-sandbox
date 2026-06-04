@@ -15,6 +15,8 @@
 # Lines prefixed with "port:" map container ports to the host, e.g.:
 #   port: 3000
 #   port: 8080:80
+# Lines prefixed with "env:" set environment variables, e.g.:
+#   env: SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxx
 #
 # Per-agent env vars: ~/.config/agent-sandbox/<agent>.env
 # Each line is KEY=VALUE, passed into the container. Use for API keys.
@@ -275,6 +277,11 @@ for config_file in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandb
             # Port mappings: lines starting with "port:"
             if [[ "$line" =~ ^port:[[:space:]]*(.*) ]]; then
                 PORTS+=(-p "${BASH_REMATCH[1]}")
+                continue
+            fi
+            # Environment variables: lines starting with "env:"
+            if [[ "$line" =~ ^env:[[:space:]]*(.*) ]]; then
+                AGENT_ENV+=(-e "${BASH_REMATCH[1]}")
                 continue
             fi
             # Volume mounts: lines starting with "volume:"

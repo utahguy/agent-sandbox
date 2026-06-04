@@ -150,6 +150,9 @@ volume: ~/shared-models:/models:ro,Z
 # Port mappings
 port: 3000
 port: 8080:80
+
+# Environment variables
+env: SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxx
 #+end_src
 
 For backwards compatibility, ~.claude-sandbox~ is also recognized.
@@ -202,6 +205,41 @@ Most terminals send the same bytes for =Enter= and =Shift+Enter=, so =Shift+Ente
 - =Alt+Enter= — sends =ESC= followed by =\r=
 
 This is a terminal-level behavior, not agent-specific.
+
+** Slack notifications when Claude finishes thinking
+
+Claude Code fires a =Notification= hook each time it finishes a response. You can use this to send a Slack message via an [[https://api.slack.com/messaging/webhooks][incoming webhook]].
+
+1. Create an incoming webhook in Slack (API → Your Apps → Incoming Webhooks → Add to channel).
+
+2. Set the webhook URL in your project's =.agent-sandbox=:
+
+#+begin_src conf
+env: SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxx
+#+end_src
+
+3. Add a =Notification= hook to your Claude Code settings. Either in =~/.claude/settings.json= (applies globally) or in your project's =.claude/settings.json= (per-project):
+
+#+begin_src json
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -X POST -H 'Content-type: application/json' --data '{\"text\":\"Claude finished thinking\"}' \"$SLACK_WEBHOOK_URL\"",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
+#+end_src
+
+The =async: true= flag ensures the hook doesn't block Claude's next response.
 
 * Running Tests
 
