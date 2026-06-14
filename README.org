@@ -1,24 +1,38 @@
 #+TITLE: agent-sandbox
-#+DESCRIPTION: Run AI coding agents in unrestricted Podman containers
+#+DESCRIPTION: Run AI coding agents in isolated OCI containers — Bash CLI + Python library
 
 * Overview
 
-~agent-sandbox~ runs AI coding agents inside rootless Podman containers with full filesystem access to your project. It handles authentication, git/SSH/GitHub CLI config, and per-project toolchain management automatically.
+~agent-sandbox~ runs AI coding agents inside rootless containers with
+full filesystem access to your project.  It handles authentication,
+git/SSH/GitHub CLI config, and per-project toolchain management
+automatically.
+
+Available as:
+- *Bash CLI* — =agent-sandbox= script for interactive use
+- *Python library* — =pip install agent-sandbox= for programmatic
+  use (e.g. from AEF or other automation frameworks)
 
 Supported agents:
 - *Claude Code* (default) — Anthropic's coding agent
 - *Codex* — OpenAI's coding agent
 - *Aider* — Open-source AI pair programming tool
 
+Supported runtimes:
+- *Podman* (rootless) — default
+- *Docker* — auto-detected when Podman is not available
+
 * Prerequisites
 
-- [[https://podman.io/][Podman]] (rootless) — the container runtime
+- [[https://podman.io/][Podman]] (rootless) or [[https://docs.docker.com/][Docker]] — the container runtime
 - An active subscription or API key for at least one agent:
   - Claude Code: Claude Pro/Max subscription (OAuth login)
   - Codex: ChatGPT Plus/Pro subscription (OAuth login)
   - Aider: API key for Anthropic or OpenAI
 
 * Installation
+
+** Bash CLI (interactive use)
 
 Clone the repo and symlink the script onto your PATH:
 
@@ -35,7 +49,89 @@ mkdir -p ~/.config/agent-sandbox
 
 The container image builds automatically on first run.
 
-* Usage
+** Python library (programmatic use)
+
+#+begin_src bash
+pip install agent-sandbox
+#+end_src
+
+Or install from source:
+
+#+begin_src bash
+cd agent-sandbox
+pip install -e .
+#+end_src
+
+* Python Library API
+
+The library provides a typed, testable API for container
+orchestration.  It follows Clean Architecture with domain entities,
+application use cases, and infrastructure adapters.
+
+** Quick start
+
+#+begin_src python
+from agent_sandbox import Sandbox, SandboxConfig
+
+# Load config from .agent-sandbox file
+config = SandboxConfig.from_file(".agent-sandbox")
+
+# Or build programmatically
+config = SandboxConfig(
+    volumes=[Volume("/host/project", "/workspace", mode="rw")],
+    ports=[PortMapping(host_port=5555, container_port=5555)],
+    mise=True,
+    memory_limit=MemoryLimit.of("8g"),
+    runtime=RuntimeKind.AUTO,
+)
+
+# Use as context manager
+with Sandbox(config) as container:
+    result = container.exec("yarn test", timeout=300)
+    print(result.exit_code, result.stdout)
+#+end_src
+
+** Key classes
+
+| Class            | Module                         | Purpose                                  |
+|------------------+--------------------------------+------------------------------------------|
+| =Sandbox=        | =agent_sandbox.facade=         | Public API — start/stop/exec             |
+| =SandboxConfig=  | =agent_sandbox.domain.entities= | Typed config (volumes, ports, env, mise) |
+| =Volume=         | =agent_sandbox.domain.value_objects= | Host-to-container volume mount     |
+| =PortMapping=    | =agent_sandbox.domain.value_objects= | Host-to-container port mapping     |
+| =MemoryLimit=    | =agent_sandbox.domain.value_objects= | Container memory limit             |
+| =RuntimeKind=    | =agent_sandbox.domain.value_objects= | AUTO, DOCKER, or PODMAN            |
+| =SandboxError=   | =agent_sandbox.exceptions=     | Base exception with error codes          |
+
+** Architecture
+
+#+begin_src text
+agent_sandbox/
+  domain/           Pure entities and value objects (zero framework imports)
+    entities.py      SandboxConfig, ContainerHandle, ExecResult
+    value_objects.py  Volume, PortMapping, MemoryLimit, RuntimeKind
+    image_spec.py     Container image specification
+  application/       Use cases and port interfaces
+    ports.py          ContainerPort, ConfigSourcePort, RuntimeDetectorPort
+    use_cases/
+      parse_config.py     Parse .agent-sandbox files
+      detect_runtime.py   Auto-detect Docker vs Podman
+      ensure_image.py     Build/pull container image
+      start_sandbox.py    Start a container
+      stop_sandbox.py     Stop a container
+      execute_command.py  Run commands inside container
+      run_agent.py        Run an AI agent (Claude/Codex/Aider)
+  infrastructure/    Concrete adapters
+    container_adapter.py   Docker/Podman container lifecycle
+    file_config_source.py  .agent-sandbox file parser
+    image_builder.py       Container image builder
+    subprocess_runtime.py  Runtime detection via subprocess
+  facade.py          Public Sandbox API (context manager)
+  cli/main.py        CLI entry point
+  exceptions.py      Typed exception hierarchy with error codes
+#+end_src
+
+* Bash CLI Usage
 
 ** Basic usage
 
@@ -67,7 +163,8 @@ agent-sandbox --as arm /home/arm/project
 agent-sandbox --as arm              # defaults to that user's home dir
 #+end_src
 
-Requires sudo access to the target user. Enables systemd lingering automatically for rootless Podman.
+Requires sudo access to the target user.  Enables systemd lingering
+automatically for rootless Podman.
 
 * Authentication
 
@@ -79,13 +176,16 @@ Authenticate on the host first:
 claude login
 #+end_src
 
-Auth tokens (~.claude.json~, ~.credentials.json~) are mounted read-write into the container so token refreshes persist.
+Auth tokens (~.claude.json~, ~.credentials.json~) are mounted
+read-write into the container so token refreshes persist.
 
 ** Codex
 
-The ~.codex/~ directory is mounted read-write. On first run, Codex will prompt you to log in inside the container. The login persists across sessions.
+The ~.codex/~ directory is mounted read-write.  On first run, Codex
+will prompt you to log in inside the container.  The login persists
+across sessions.
 
-Codex requires Node.js. Add a ~.mise.toml~ to your project:
+Codex requires Node.js.  Add a ~.mise.toml~ to your project:
 
 #+begin_src toml
 [tools]
@@ -94,15 +194,13 @@ node = "22"
 
 ** Aider
 
-Aider authenticates via API keys. Create an env file:
+Aider authenticates via API keys.  Create an env file:
 
 #+begin_src bash
 echo "ANTHROPIC_API_KEY=sk-ant-..." > ~/.config/agent-sandbox/aider.env
-# or
-echo "OPENAI_API_KEY=sk-..." > ~/.config/agent-sandbox/aider.env
 #+end_src
 
-Aider requires Python. Add a ~.mise.toml~ to your project:
+Aider requires Python.  Add a ~.mise.toml~ to your project:
 
 #+begin_src toml
 [tools]
@@ -111,36 +209,43 @@ python = "3.12"
 
 * Per-Agent Environment Files
 
-Any agent can receive extra environment variables via ~\~/.config/agent-sandbox/<agent>.env~. Each line is =KEY=VALUE=, comments start with =#=:
+Any agent can receive extra environment variables via
+=~/.config/agent-sandbox/<agent>.env=.  Each line is =KEY=VALUE=,
+comments start with =#=:
 
 #+begin_src conf
 # ~/.config/agent-sandbox/aider.env
 ANTHROPIC_API_KEY=sk-ant-...
 #+end_src
 
-#+begin_src conf
-# ~/.config/agent-sandbox/codex.env
-OPENAI_API_KEY=sk-...
-#+end_src
-
 * Toolchain Management with mise
 
-The container includes [[https://mise.jdx.dev/][mise]] for managing language runtimes (Python, Node.js, Rust, Go, etc.). Drop a ~.mise.toml~ in your project root:
+The container includes [[https://mise.jdx.dev/][mise]] for managing
+language runtimes (Python, Node.js, Rust, Go, etc.).  Drop a
+~.mise.toml~ in your project root:
 
 #+begin_src toml
 [tools]
 python = "3.12"
 node = "22"
 rust = "1.82"
+
+# npm packages are also supported
+"npm:android-mcp-server" = "latest"
 #+end_src
 
-The entrypoint runs ~mise install~ automatically at container start. Installed toolchains are cached on the host at =~/.local/share/agent-sandbox-mise/= and shared across all projects, so only the first install for each version downloads anything.
+The entrypoint runs ~mise install~ automatically at container start.
+Installed toolchains are cached on the host at
+=~/.local/share/agent-sandbox-mise/= and shared across all projects.
 
-Mise also reads idiomatic version files: ~.python-version~, ~.node-version~, ~.nvmrc~, ~.ruby-version~, ~.go-version~, ~.tool-versions~.
+Mise also reads idiomatic version files: ~.python-version~,
+~.node-version~, ~.nvmrc~, ~.ruby-version~, ~.go-version~,
+~.tool-versions~.
 
 * Per-Project Configuration
 
-Create a ~.agent-sandbox~ file in your project root for extra volume mounts and port mappings:
+Create a ~.agent-sandbox~ file in your project root for extra volume
+mounts, port mappings, and environment variables:
 
 #+begin_src conf
 # Extra volume mounts (podman -v syntax)
@@ -150,12 +255,47 @@ volume: ~/shared-models:/models:ro,Z
 # Port mappings
 port: 3000
 port: 8080:80
+port: 5555:5555    # ADB for Android emulator access
 
 # Environment variables
 env: SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxx
+env: API_BASE_URL=https://api.example.com
+
+# Mise toolchain management
+mise: true
+
+# Container resource limits
+memory: 8g
+
+# Container runtime (auto-detected if omitted)
+runtime: auto
 #+end_src
 
 For backwards compatibility, ~.claude-sandbox~ is also recognized.
+
+* MCP Server Integration
+
+To make MCP servers available to Claude Code inside the container,
+add a ~.mcp.json~ to your project root:
+
+#+begin_src json
+{
+  "mcpServers": {
+    "android": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "android-mcp-server"],
+      "env": {
+        "ANDROID_HOME": "${ANDROID_HOME:-$HOME/.android/sdk}"
+      }
+    }
+  }
+}
+#+end_src
+
+Combined with ~.mise.toml~ (to install the MCP server) and
+~.agent-sandbox~ (to map the ADB port), this enables autonomous
+mobile device testing from inside the container.
 
 * What Gets Mounted
 
@@ -164,20 +304,40 @@ For backwards compatibility, ~.claude-sandbox~ is also recognized.
 | Project directory  | read-write | Mounted at =/workspace=                    |
 | Git config         | read-only  | =~/.gitconfig=, =~/.gitignore_global=     |
 | SSH keys           | read-only  | Symlinked; =known_hosts= copied writable   |
-| SSH agent socket   | read-write | Forwarded via =$SSH_AUTH_SOCK= when set on host |
+| SSH agent socket   | read-write | Forwarded via =$SSH_AUTH_SOCK=             |
 | GitHub CLI config  | read-only  | Copied writable at startup                 |
 | Claude auth tokens | read-write | Token refreshes persist to host            |
 | Codex auth         | read-write | Login persists to host                     |
 | Claude sessions    | read-write | Stored in =PROJECT/.claude-sessions/=      |
 | Mise cache         | read-write | Shared at =~/.local/share/agent-sandbox-mise/= |
-| uv cache           | read-write | Host =~/.cache/uv= (Linux/WSL) or =~/Library/Caches/uv= (macOS) |
+| uv cache           | read-write | Host cache directory                       |
+
+* Running Tests
+
+** Python library tests
+
+#+begin_src bash
+python -m pytest tests/ -v
+#+end_src
+
+579 tests covering domain entities, value objects, application ports,
+use cases, infrastructure adapters, CLI, facade, and E2E steel thread.
+
+** Bash CLI tests
+
+#+begin_src bash
+./tests/run-tests.sh
+#+end_src
+
+The bash tests stub out =podman=, =systemctl=, and =uname= so nothing
+touches the container runtime.
 
 * Environment Variables
 
 | Variable               | Default          | Description                        |
 |-------------------------+------------------+------------------------------------|
 | =AGENT_SANDBOX_IMAGE=  | =agent-sandbox=  | Container image base name          |
-| =AGENT_SANDBOX_EXTRA=  | (empty)          | Additional podman args             |
+| =AGENT_SANDBOX_EXTRA=  | (empty)          | Additional podman/docker args      |
 
 * Tips
 
@@ -189,36 +349,16 @@ Each agent reads its own convention-named file from the project root:
 - *Codex* reads =AGENTS.md=
 - *Aider* reads =CONVENTIONS.md= (via =--read=)
 
-Since the whole project directory is mounted into the container, dropping any of these files in your project root is all that's needed — agent-sandbox does nothing special with them. If you want the same context across multiple agents, symlink one to the other:
-
-#+begin_src bash
-ln -s CLAUDE.md AGENTS.md
-#+end_src
-
-/Note: only the Claude Code path (=CLAUDE.md=) has been tested. The Codex and Aider entries are based on general knowledge of those tools, not actual verification inside agent-sandbox. Please confirm before relying on them./
-
-** Multi-line input
-
-Most terminals send the same bytes for =Enter= and =Shift+Enter=, so =Shift+Enter= can't be used to insert a newline without terminal-specific configuration. Two keys that work in most terminals without any setup:
-
-- =Ctrl+J= — sends LF (=\n=), distinct from Enter's CR (=\r=)
-- =Alt+Enter= — sends =ESC= followed by =\r=
-
-This is a terminal-level behavior, not agent-specific.
-
 ** Slack notifications when Claude finishes thinking
 
-Claude Code fires a =Notification= hook each time it finishes a response. You can use this to send a Slack message via an [[https://api.slack.com/messaging/webhooks][incoming webhook]].
-
-1. Create an incoming webhook in Slack (API → Your Apps → Incoming Webhooks → Add to channel).
-
-2. Set the webhook URL in your project's =.agent-sandbox=:
+Claude Code fires a =Notification= hook each time it finishes a
+response.  Set the webhook URL in your project's =.agent-sandbox=:
 
 #+begin_src conf
 env: SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxx
 #+end_src
 
-3. Add a =Notification= hook to your Claude Code settings. Either in =~/.claude/settings.json= (applies globally) or in your project's =.claude/settings.json= (per-project):
+Then add a =Notification= hook to your Claude Code settings:
 
 #+begin_src json
 {
@@ -239,68 +379,29 @@ env: SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxx
 }
 #+end_src
 
-The =async: true= flag ensures the hook doesn't block Claude's next response.
-
-* Running Tests
-
-#+begin_src bash
-./tests/run-tests.sh
-#+end_src
-
-The tests stub out =podman=, =systemctl=, and =uname= so nothing touches the container runtime. They capture the final =podman run= argv and assert on it. No Podman installation is required.
-
 * Troubleshooting
 
 ** =can't raise ambient capability CAP_*= during image build
 
-Example:
+These come from rootless Buildah/crun during =RUN= steps.  The build
+completes successfully — the warnings are cosmetic.
 
-#+begin_example
-STEP 8/14: RUN groupadd -g ${USER_GID} claude ...
-time="..." level=warning msg="can't raise ambient capability CAP_CHOWN: operation not permitted"
-time="..." level=warning msg="can't raise ambient capability CAP_DAC_OVERRIDE: operation not permitted"
-...
---> cb1b1e2056ae
-#+end_example
-
-These come from rootless Buildah/crun during =RUN= steps. The build completes successfully — a new layer ID is printed after each warning block — so the image is fine. The warnings are cosmetic and depend on your host's runtime version and kernel.
-
-To silence them, either set =BUILDAH_ISOLATION=chroot= in your shell:
-
-#+begin_src bash
-export BUILDAH_ISOLATION=chroot
-#+end_src
-
-or upgrade =crun=:
-
-#+begin_src bash
-crun --version
-sudo apt install --only-upgrade crun
-#+end_src
+To silence: =export BUILDAH_ISOLATION=chroot= or upgrade =crun=.
 
 ** =Executing external compose provider "...docker-compose"=
 
-This is Podman informing you that =podman compose= is delegating to your installed =docker-compose= binary. It is benign — Podman's compose support is a thin wrapper around whichever compose provider is configured.
-
-To silence, add the following to =~/.config/containers/containers.conf= (create the file if it doesn't exist):
+Benign — Podman delegating to docker-compose.  Silence with:
 
 #+begin_src toml
+# ~/.config/containers/containers.conf
 [engine]
 compose_warning_logs = false
 #+end_src
 
-** =mise ERROR ... Permission denied= under =~/.cache/mise=
-
-Fixed in the Containerfile as of commit =ad01425=. If you still see this, force a rebuild:
-
-#+begin_src bash
-podman rmi agent-sandbox-$(id -u)
-agent-sandbox
-#+end_src
-
 * Rebuilding the Image
 
-The image rebuilds automatically when ~Containerfile~ or ~entrypoint.sh~ change. To force a rebuild:
+The image rebuilds automatically when ~Containerfile~ or
+~entrypoint.sh~ change.  To force a rebuild:
 
 #+begin_src bash
 podman rmi agent-sandbox-$(id -u)
