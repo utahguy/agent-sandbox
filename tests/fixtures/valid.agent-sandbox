@@ -1,0 +1,23 @@
+# Representative valid agent-sandbox configuration
+# Comments and blank lines are ignored
+
+# Volume mounts: volume HOST_PATH:CONTAINER_PATH[:mode]
+volume /src:/workspace:rw
+volume /data:/data:ro
+
+# Port mappings: port HOST_PORT:CONTAINER_PORT[/protocol]
+port 8080:80/tcp
+port 5432:5432
+
+# Environment variables: env KEY=VALUE
+env API_KEY=secret123
+env DEBUG=1
+
+# Enable mise tooling
+mise
+
+# Memory limit: memory <value><unit>  (unit: b/k/m/g)
+memory 512m
+
+# Container runtime: runtime auto|docker|podman
+runtime docker

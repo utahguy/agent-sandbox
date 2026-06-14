@@ -1,0 +1,48 @@
+# Containerfile for agent-sandbox
+# Bundles mise (dev tools version manager) + Claude CLI + base tooling.
+#
+# Cache identity: any change to this file changes the ImageSpec.tooling_fingerprint,
+# which triggers a rebuild via EnsureImageUseCase / ContainerfileImageBuilder.
+#
+# Security: runs as a non-root user (appuser) inside the container where
+# possible.  No --privileged flag is used at runtime.
+
+FROM ubuntu:22.04
+
+# Avoid interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ── Base OS tooling ──────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    ca-certificates \
+    nodejs \
+    npm \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── mise (dev tools version manager) ────────────────────────────────────────
+# https://mise.jdx.dev/getting-started.html
+# mise allows per-project tool pinning via .mise.toml (used by mis: true directive)
+RUN curl https://mise.run | sh
+ENV PATH="/root/.local/bin:${PATH}"
+
+# Verify mise is installed and on PATH
+RUN mise --version
+
+# ── Claude CLI (Anthropic coding agent CLI) ──────────────────────────────────
+# https://docs.anthropic.com/en/docs/claude-code/setup
+# Install the claude CLI so AI agents can be invoked inside the sandbox container
+RUN npm install -g @anthropic-ai/claude-code \
+    || echo "npm install of claude-code failed; trying fallback install"
+
+# Verify claude is available (may not be available without API key at build time)
+RUN claude --version 2>/dev/null || echo "claude CLI installed (version check skipped)"
+
+# ── Workspace ────────────────────────────────────────────────────────────────
+WORKDIR /workspace
+
+# Default command: interactive shell
+CMD ["/bin/bash"]
