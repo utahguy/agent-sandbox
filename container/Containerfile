@@ -49,7 +49,9 @@ RUN groupadd -g ${USER_GID} claude 2>/dev/null || true && \
     useradd -m -u ${USER_UID} -g ${USER_GID} -s /bin/bash claude && \
     mkdir -p /home/claude/.claude /home/claude/.config \
              /home/claude/.local/state/mise /home/claude/.local/share/mise \
-             /home/claude/.cache/uv /home/claude/.cache/mise && \
+             /home/claude/.cache/uv /home/claude/.cache/mise \
+             /home/claude/.local/bin && \
+    ln -s /usr/local/bin/claude /home/claude/.local/bin/claude && \
     chown -R ${USER_UID}:${USER_GID} /home/claude
 
 # Set working directory
