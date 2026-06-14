@@ -1,0 +1,2 @@
+# Malformed config: volume directive missing colon separator
+volume not-a-valid-path

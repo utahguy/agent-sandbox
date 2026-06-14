@@ -1,0 +1,8 @@
+# E2E steel-thread test fixture
+#
+# Minimal agent-sandbox configuration for the end-to-end smoke test.
+# No volumes, ports, or environment variables are required — the smoke
+# test only needs to execute a simple command inside the container.
+#
+# runtime auto: let the system pick the available runtime (Docker or Podman).
+runtime auto
