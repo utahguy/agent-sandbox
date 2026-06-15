@@ -63,14 +63,9 @@ RUN chown ${USER_UID}:${USER_GID} /home/claude/entrypoint.sh && \
 USER ${USER_UID}
 ENV PATH="/home/claude/.local/bin:${PATH}"
 
-# ── agent-sandbox Python package ─────────────────────────────────────────────
-# Install the agent-sandbox host orchestrator so the canonical Python entry
-# point (agent_sandbox.cli.main:main) is available inside the container.
-# Canonical entry: agent_sandbox.cli.main:main  (matches pyproject.toml [project.scripts])
-RUN pip install --quiet agent-sandbox 2>/dev/null || true
-
-# Entry point: delegates to entrypoint.sh (agent dispatch) via the canonical
-# Python CLI module agent_sandbox.cli.main.  The ENTRYPOINT below ensures that
-# both pyproject.toml [project.scripts] and this Containerfile reference the
-# same importable module path (agent_sandbox.cli.main).
-ENTRYPOINT ["python", "-m", "agent_sandbox.cli.main"]
+# Entry point: the in-container dispatcher. entrypoint.sh sets up SSH/gh/mise
+# and then execs the selected agent (Claude/Codex/Aider), passing along any
+# args appended by the host. The agent_sandbox Python package is the *host*
+# orchestrator (it starts and manages this container) and intentionally lives
+# only on the host — it is not installed in, nor invoked by, the image.
+ENTRYPOINT ["/home/claude/entrypoint.sh"]
