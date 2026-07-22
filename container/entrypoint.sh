@@ -23,7 +23,11 @@ if [ "$(id -u)" = "0" ]; then
         apt-get install -y --no-install-recommends ${SANDBOX_APT_PACKAGES}
         rm -rf /var/lib/apt/lists/*
     fi
-    # Drop privileges and re-exec as the project user
+    # Drop privileges and re-exec as the project user.
+    # setpriv switches UID/GID but does not update HOME, so set it explicitly
+    # so that mise and other tools find the right home directory.
+    USER_HOME=$(getent passwd "${USER_UID:-1000}" | cut -d: -f6)
+    export HOME="${USER_HOME:-/home/claude}"
     exec setpriv \
         --reuid="${USER_UID:-1000}" \
         --regid="${USER_GID:-1000}" \
