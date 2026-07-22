@@ -164,14 +164,30 @@ if [ -n "$PROJECT_CONTAINER_FILE" ]; then
     IMAGE_NAME="${PROJECT_IMAGE_NAME}"
 fi
 
+# --- Resolve Claude config dir: env var > settings.local.json > default ---
+CLAUDE_CONFIG="${CLAUDE_CONFIG_DIR:-}"
+if [ -z "$CLAUDE_CONFIG" ] && [ -f "${HOME}/.claude/settings.local.json" ]; then
+    if command -v jq &>/dev/null; then
+        CLAUDE_CONFIG="$(jq -r '.env.CLAUDE_CONFIG_DIR // empty' "${HOME}/.claude/settings.local.json" 2>/dev/null || true)"
+    else
+        CLAUDE_CONFIG="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('env',{}).get('CLAUDE_CONFIG_DIR',''))" "${HOME}/.claude/settings.local.json" 2>/dev/null || true)"
+    fi
+fi
+CLAUDE_CONFIG="${CLAUDE_CONFIG:-${HOME}/.claude}"
+
 # --- Prepare settings in a temp dir (read-only inside container) ---
 AUTH_TMPDIR="$(mktemp -d)"
 cleanup() { rm -rf "$AUTH_TMPDIR"; }
 trap cleanup EXIT
 
-if [ -f "${HOME}/.claude/settings.json" ]; then
-    cp "${HOME}/.claude/settings.json" "${AUTH_TMPDIR}/settings.json"
+if [ -f "${CLAUDE_CONFIG}/settings.json" ]; then
+    cp "${CLAUDE_CONFIG}/settings.json" "${AUTH_TMPDIR}/settings.json"
     chmod 644 "${AUTH_TMPDIR}/settings.json"
+fi
+
+if [ -f "${CLAUDE_CONFIG}/settings.local.json" ]; then
+    cp "${CLAUDE_CONFIG}/settings.local.json" "${AUTH_TMPDIR}/settings.local.json"
+    chmod 644 "${AUTH_TMPDIR}/settings.local.json"
 fi
 
 # Make temp dir traversable
@@ -189,9 +205,10 @@ case "$SANDBOX_AGENT" in
     claude)
         # Auth tokens — mounted read-write so token refreshes persist back to the host
         [ -f "${HOME}/.claude.json" ]              && VOLUMES+=(-v "${HOME}/.claude.json:/home/claude/.claude.json:Z")
-        [ -f "${HOME}/.claude/.credentials.json" ] && VOLUMES+=(-v "${HOME}/.claude/.credentials.json:/home/claude/.claude/.credentials.json:Z")
+        [ -f "${CLAUDE_CONFIG}/.credentials.json" ] && VOLUMES+=(-v "${CLAUDE_CONFIG}/.credentials.json:/home/claude/.claude/.credentials.json:Z")
         # Settings — read-only via temp copy (protects against container writes)
-        [ -f "${AUTH_TMPDIR}/settings.json" ]      && VOLUMES+=(-v "${AUTH_TMPDIR}/settings.json:/tmp/claude-settings-src:ro,Z")
+        [ -f "${AUTH_TMPDIR}/settings.json" ]           && VOLUMES+=(-v "${AUTH_TMPDIR}/settings.json:/tmp/claude-settings-src:ro,Z")
+        [ -f "${AUTH_TMPDIR}/settings.local.json" ]     && VOLUMES+=(-v "${AUTH_TMPDIR}/settings.local.json:/tmp/claude-settings-local-src:ro,Z")
         # Session persistence — store in the project directory so /resume works
         SESSION_DIR="${PROJECT_DIR}/.claude-sessions"
         mkdir -p "${SESSION_DIR}/projects" "${SESSION_DIR}/sessions"
@@ -267,6 +284,7 @@ VOLUMES+=(-v "${UV_CACHE_HOST}:/home/claude/.cache/uv:Z")
 
 # Read per-project extra mounts and port mappings from .agent-sandbox
 PORTS=()
+SANDBOX_PACKAGES=()
 for config_file in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandbox"; do
     if [ -f "${config_file}" ]; then
         while IFS= read -r line; do
@@ -282,6 +300,11 @@ for config_file in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandb
             # Environment variables: lines starting with "env:"
             if [[ "$line" =~ ^env:[[:space:]]*(.*) ]]; then
                 AGENT_ENV+=(-e "${BASH_REMATCH[1]}")
+                continue
+            fi
+            # Package installation: lines starting with "packages:"
+            if [[ "$line" =~ ^packages:[[:space:]]*(.*) ]]; then
+                SANDBOX_PACKAGES+=("${BASH_REMATCH[1]}")
                 continue
             fi
             # Volume mounts: lines starting with "volume:"
@@ -345,6 +368,11 @@ fi
 # Debug: show network configuration
 if [ ${#EXTRA_COMPOSE_ARGS[@]} -gt 0 ]; then
     echo "Connecting sandbox to networks: ${EXTRA_COMPOSE_ARGS[*]}"
+fi
+
+# Pass declared packages to the entrypoint root-init phase
+if [ ${#SANDBOX_PACKAGES[@]} -gt 0 ]; then
+    AGENT_ENV+=(-e "SANDBOX_APT_PACKAGES=${SANDBOX_PACKAGES[*]}")
 fi
 
 run_podman run --rm -it \
