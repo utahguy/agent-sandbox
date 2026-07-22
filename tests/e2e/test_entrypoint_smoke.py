@@ -768,18 +768,19 @@ class TestSmokeTestInfrastructure:
             f"expected {expected!r}."
         )
 
-    def test_containerfile_entrypoint_references_canonical_module(self) -> None:
-        """``container/Containerfile`` ENTRYPOINT must reference the canonical module.
+    def test_containerfile_entrypoint_references_shell_entrypoint(self) -> None:
+        """``container/Containerfile`` ENTRYPOINT must reference the shell entrypoint.
 
-        Static analysis: checks that the text ``agent_sandbox.cli.main`` appears
-        in the Containerfile — the actual ENTRYPOINT is
-        ``["python", "-m", "agent_sandbox.cli.main"]``.
+        Static analysis: checks that ``entrypoint.sh`` appears in the
+        Containerfile ENTRYPOINT directive.  The container uses a shell script
+        (not the Python CLI module) as its entrypoint so it can run a root init
+        phase (package installation) before dropping to the project user.
         """
         content = CONTAINERFILE.read_text(encoding="utf-8")
-        assert CANONICAL_MODULE in content, (
-            f"Containerfile does not reference '{CANONICAL_MODULE}'.\n"
+        assert "entrypoint.sh" in content, (
+            f"Containerfile does not reference 'entrypoint.sh'.\n"
             f"The ENTRYPOINT should be: "
-            f'["python", "-m", "{CANONICAL_MODULE}"]\n'
+            f'["/home/claude/entrypoint.sh"]\n'
             f"Containerfile path: {CONTAINERFILE}"
         )
 
@@ -823,33 +824,22 @@ class TestSmokeTestInfrastructure:
             "RUNTIME_SKIP_REASON must mention 'PATH'"
         )
 
-    def test_pyproject_toml_and_containerfile_reference_same_module(self) -> None:
-        """The module path in ``pyproject.toml`` and ``container/Containerfile`` must agree.
+    def test_containerfile_entrypoint_script_exists(self) -> None:
+        """The shell script referenced in the Containerfile ENTRYPOINT must exist.
 
-        Cross-file consistency guard: if one is updated, the other must follow.
+        Cross-file consistency guard: ``container/Containerfile`` references
+        ``entrypoint.sh`` as its ENTRYPOINT; the script must be present alongside it.
+        The container uses a shell entrypoint (not the Python CLI module) so that
+        a root init phase can install declared apt packages before dropping
+        privileges to the project user.
         """
-        import tomllib, re
-
-        with PYPROJECT_TOML.open("rb") as f:
-            data = tomllib.load(f)
-
-        scripts = data.get("project", {}).get("scripts", {})
-        pyproject_entry = scripts.get("agent-sandbox", "")
-        pyproject_module, _, _ = pyproject_entry.partition(":")
-
         containerfile_content = CONTAINERFILE.read_text(encoding="utf-8")
-        # Match: python -m agent_sandbox.cli.main (with or without quotes/brackets)
-        match = re.search(r'-m\s+([A-Za-z_][A-Za-z0-9_.]*)', containerfile_content)
-        if match:
-            containerfile_module = match.group(1)
-        elif CANONICAL_MODULE in containerfile_content:
-            containerfile_module = CANONICAL_MODULE
-        else:
-            containerfile_module = ""
-
-        assert pyproject_module == containerfile_module, (
-            f"Module path mismatch:\n"
-            f"  pyproject.toml: {pyproject_module!r}\n"
-            f"  Containerfile:  {containerfile_module!r}\n"
-            "Both files must reference the same canonical entry module."
+        assert "entrypoint.sh" in containerfile_content, (
+            "Containerfile ENTRYPOINT does not reference entrypoint.sh.\n"
+            f"Containerfile path: {CONTAINERFILE}"
+        )
+        entrypoint_script = CONTAINERFILE.parent / "entrypoint.sh"
+        assert entrypoint_script.exists(), (
+            f"entrypoint.sh not found at {entrypoint_script}.\n"
+            "The Containerfile ENTRYPOINT references this file — it must exist."
         )

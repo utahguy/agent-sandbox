@@ -1,10 +1,39 @@
 #!/usr/bin/env bash
 # Container entrypoint for agent-sandbox.
 #
-# Dispatches to the selected AI agent based on $SANDBOX_AGENT env var.
-# Handles shared setup (SSH, gh, mise) and agent-specific auth.
+# Phase 1 (root): Install project-declared apt packages from
+#   SANDBOX_APT_PACKAGES, then drop privileges to the project user via
+#   setpriv(1) and re-exec this script as that user.
+#
+# Phase 2 (project user): Dispatches to the selected AI agent based on
+#   $SANDBOX_AGENT env var. Handles shared setup (SSH, gh, mise) and
+#   agent-specific auth.
 
 set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Phase 1 — root-only: install packages, then drop to project user
+# ---------------------------------------------------------------------------
+if [ "$(id -u)" = "0" ]; then
+    if [ -n "${SANDBOX_APT_PACKAGES:-}" ]; then
+        echo "[agent-sandbox] Installing packages: ${SANDBOX_APT_PACKAGES}"
+        apt-get update -qq
+        # Word-split intentional: SANDBOX_APT_PACKAGES is a space-separated list
+        # shellcheck disable=SC2086
+        apt-get install -y --no-install-recommends ${SANDBOX_APT_PACKAGES}
+        rm -rf /var/lib/apt/lists/*
+    fi
+    # Drop privileges and re-exec as the project user
+    exec setpriv \
+        --reuid="${USER_UID:-1000}" \
+        --regid="${USER_GID:-1000}" \
+        --init-groups \
+        "$0" "$@"
+fi
+
+# ---------------------------------------------------------------------------
+# Phase 2 — project user session begins here
+# ---------------------------------------------------------------------------
 
 SANDBOX_AGENT="${SANDBOX_AGENT:-claude}"
 USER_HOME="/home/claude"
@@ -12,9 +41,12 @@ USER_HOME="/home/claude"
 # Ensure .claude directory exists (used by claude agent and for settings)
 mkdir -p "${USER_HOME}/.claude"
 
-# Claude settings — copy from read-only mount
+# Claude settings — copy from read-only mounts
 if [ -f /tmp/claude-settings-src ]; then
     cp -f /tmp/claude-settings-src "${USER_HOME}/.claude/settings.json"
+fi
+if [ -f /tmp/claude-settings-local-src ]; then
+    cp -f /tmp/claude-settings-local-src "${USER_HOME}/.claude/settings.local.json"
 fi
 
 # SSH setup — symlink keys from read-only mount, writable known_hosts

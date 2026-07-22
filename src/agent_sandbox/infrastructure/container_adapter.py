@@ -415,6 +415,12 @@ class CliContainerAdapter:
         for key, value in config.env.items():
             args.extend(_build_env_arg(key, value))
 
+        # Project-declared apt packages — passed as a space-separated env var
+        # so the root phase of the entrypoint can install them before dropping
+        # privileges to the project user.
+        if config.packages:
+            args.extend(_build_env_arg("SANDBOX_APT_PACKAGES", " ".join(config.packages)))
+
         # Memory limit
         if config.memory_limit is not None:
             args.extend(_build_memory_arg(config.memory_limit))

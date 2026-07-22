@@ -50,6 +50,8 @@ class SandboxConfig:
         mise: When True, install tooling via mise on container start.
         memory_limit: Optional memory cap; None means no explicit limit.
         runtime: Which container runtime to use (default: AUTO).
+        packages: apt package names to install at container startup (as root,
+                  before the agent user session begins).
         config_path: Filesystem path of the config file that was parsed
                      (provenance; None when constructed programmatically).
         source_filename: Basename of the config file (e.g. ``.agent-sandbox``).
@@ -61,6 +63,7 @@ class SandboxConfig:
     mise: bool = False
     memory_limit: Optional[MemoryLimit] = None
     runtime: RuntimeKind = RuntimeKind.AUTO
+    packages: list[str] = field(default_factory=list)
     config_path: Optional[Path] = None
     source_filename: str = ""
 
