@@ -13,12 +13,13 @@ Lines beginning with ``#`` are comments and are ignored.
 Blank lines are ignored.
 Each non-empty, non-comment line is a *directive*::
 
-    volume HOST_PATH:CONTAINER_PATH[:mode]
-    port   HOST_PORT:CONTAINER_PORT[/protocol]
-    env    KEY=VALUE
+    volume   HOST_PATH:CONTAINER_PATH[:mode]
+    port     HOST_PORT:CONTAINER_PORT[/protocol]
+    env      KEY=VALUE
     mise
-    memory VALUE<unit>       # unit: b / k / m / g
-    runtime auto|docker|podman
+    memory   VALUE<unit>       # unit: b / k / m / g
+    runtime  auto|docker|podman
+    packages PACKAGE_NAME      # apt package; repeat for multiple packages
 
 Examples::
 
@@ -49,7 +50,10 @@ from agent_sandbox.domain.value_objects import (
 from agent_sandbox.exceptions import ErrorCode, SandboxError
 
 # Supported directive names (lower-case)
-_KNOWN_DIRECTIVES = frozenset({"volume", "port", "env", "mise", "memory", "runtime"})
+_KNOWN_DIRECTIVES = frozenset({"volume", "port", "env", "mise", "memory", "runtime", "packages"})
+
+# Valid apt package name: starts with alnum, remainder is alnum, +, -, or .
+_PACKAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+\-.]*$")
 
 # Regex for memory values: one or more digits followed by a unit letter
 _MEMORY_RE = re.compile(r"^(\d+)([bkmg])$", re.IGNORECASE)
@@ -90,6 +94,7 @@ class ParseConfigUseCase:
         mise: bool = False
         memory_limit: Optional[MemoryLimit] = None
         runtime: RuntimeKind = RuntimeKind.AUTO
+        packages: list[str] = []
 
         for lineno, raw_line in enumerate(text.splitlines(), start=1):
             line = raw_line.strip()
@@ -123,6 +128,8 @@ class ParseConfigUseCase:
                 memory_limit = self._parse_memory(arg, lineno)
             elif directive == "runtime":
                 runtime = self._parse_runtime(arg, lineno)
+            elif directive == "packages":
+                packages.append(self._parse_package(arg, lineno))
 
         return SandboxConfig(
             volumes=volumes,
@@ -131,6 +138,7 @@ class ParseConfigUseCase:
             mise=mise,
             memory_limit=memory_limit,
             runtime=runtime,
+            packages=packages,
         )
 
     # ------------------------------------------------------------------
@@ -304,6 +312,32 @@ class ParseConfigUseCase:
 
         # MemoryLimit constructor validates the unit
         return MemoryLimit(value=value, unit=unit)
+
+    @staticmethod
+    def _parse_package(arg: str, lineno: int) -> str:
+        """Parse a ``packages`` directive argument into a package name.
+
+        Expected format: a single apt package name (e.g. ``postgresql-client``).
+        One package per directive line; repeat the directive for multiple packages.
+
+        Raises:
+            SandboxError: For missing or invalid package names.
+        """
+        if not arg:
+            raise SandboxError(
+                f"Malformed 'packages' directive on line {lineno}: "
+                f"expected a package name (e.g. packages: postgresql-client), got nothing.",
+                code=ErrorCode.CONFIG_MALFORMED,
+            )
+        if not _PACKAGE_NAME_RE.match(arg):
+            raise SandboxError(
+                f"Malformed 'packages' directive on line {lineno}: "
+                f"invalid package name {arg!r}. "
+                f"Package names must start with a letter or digit and contain "
+                f"only letters, digits, '+', '-', or '.'.",
+                code=ErrorCode.CONFIG_MALFORMED,
+            )
+        return arg
 
     @staticmethod
     def _parse_runtime(arg: str, lineno: int) -> RuntimeKind:

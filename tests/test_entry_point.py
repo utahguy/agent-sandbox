@@ -238,13 +238,17 @@ class TestContainerfileEntryPoint:
             f"Containerfile not found at {CONTAINERFILE}"
         )
 
-    def test_containerfile_entrypoint_references_canonical_module(self):
-        """Containerfile ENTRYPOINT must reference agent_sandbox.cli.main."""
+    def test_containerfile_entrypoint_references_shell_script(self):
+        """Containerfile ENTRYPOINT must reference entrypoint.sh.
+
+        The container uses a shell entrypoint so a root init phase can install
+        declared apt packages before dropping privileges to the project user.
+        """
         content = CONTAINERFILE.read_text(encoding="utf-8")
-        assert CANONICAL_MODULE in content, (
-            f"Containerfile does not reference canonical module '{CANONICAL_MODULE}'. "
-            f"The ENTRYPOINT must reference agent_sandbox.cli.main so that "
-            f"pyproject.toml and Containerfile point to the same module."
+        assert "entrypoint.sh" in content, (
+            "Containerfile does not reference entrypoint.sh. "
+            "The ENTRYPOINT must be the shell script that handles the root "
+            "package-install phase before dropping to the project user."
         )
 
 
@@ -264,50 +268,39 @@ def _extract_module_from_pyproject(content: str) -> str:
     return module_path
 
 
-def _extract_module_from_containerfile(content: str) -> str:
-    """Extract the Python module path from the Containerfile ENTRYPOINT."""
-    # Match pattern like: python -m agent_sandbox.cli.main
-    # or ENTRYPOINT ["python", "-m", "agent_sandbox.cli.main"]
-    match = re.search(r'-m\s+([A-Za-z_][A-Za-z0-9_.]*)', content)
-    if match:
-        return match.group(1)
-    # Fallback: direct module reference in ENTRYPOINT
-    match = re.search(r'ENTRYPOINT.*?agent_sandbox\.cli\.main', content)
-    if match:
-        return CANONICAL_MODULE
-    return ""
-
-
 @pytest.mark.parametrize(
     "filepath,extractor",
     [
         (PYPROJECT_TOML, _extract_module_from_pyproject),
-        (CONTAINERFILE, _extract_module_from_containerfile),
     ],
-    ids=["pyproject.toml", "Containerfile"],
+    ids=["pyproject.toml"],
 )
 def test_canonical_module_path_in_file(filepath, extractor):
-    """Criterion 3: Both pyproject.toml and Containerfile reference the canonical module."""
+    """Criterion 3: pyproject.toml references the canonical module.
+
+    Note: the Containerfile uses a shell script entrypoint (not the Python
+    CLI module) so that a root init phase can install declared apt packages
+    before dropping privileges to the project user.  The Python module check
+    therefore applies only to pyproject.toml.
+    """
     content = filepath.read_text(encoding="utf-8")
     module_path = extractor(content)
     assert module_path == CANONICAL_MODULE, (
         f"In {filepath.name}: expected module path '{CANONICAL_MODULE}', "
-        f"got '{module_path}'. Both pyproject.toml and Containerfile must "
-        f"reference the same canonical entry module."
+        f"got '{module_path}'."
     )
 
 
-def test_module_paths_match_across_files():
-    """The module path extracted from pyproject.toml and Containerfile must be equal."""
-    pyproject_module = _extract_module_from_pyproject(
-        PYPROJECT_TOML.read_text(encoding="utf-8")
-    )
-    containerfile_module = _extract_module_from_containerfile(
-        CONTAINERFILE.read_text(encoding="utf-8")
-    )
-    assert pyproject_module == containerfile_module, (
-        f"Module path mismatch: pyproject.toml says '{pyproject_module}', "
-        f"Containerfile says '{containerfile_module}'. They must agree."
+def test_containerfile_uses_shell_entrypoint():
+    """Containerfile ENTRYPOINT must reference the shell script, not a Python module.
+
+    The container uses entrypoint.sh so a root init phase can install
+    project-declared apt packages before dropping privileges to the project user.
+    """
+    content = CONTAINERFILE.read_text(encoding="utf-8")
+    assert "entrypoint.sh" in content, (
+        "Containerfile does not reference entrypoint.sh. "
+        "The ENTRYPOINT must be the shell script."
     )
 
 

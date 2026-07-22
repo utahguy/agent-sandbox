@@ -41,6 +41,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG USER_UID=1000
 ARG USER_GID=1000
 
+# Expose UID/GID as runtime env vars so the entrypoint can drop privileges
+# from root → project user after installing declared apt packages.
+ENV USER_UID=${USER_UID} USER_GID=${USER_GID}
+
 # Force cache bust when UID/GID change — ARG alone doesn't always invalidate
 RUN echo "Building for UID=${USER_UID} GID=${USER_GID}"
 
@@ -62,12 +66,9 @@ COPY entrypoint.sh /home/claude/entrypoint.sh
 RUN chown ${USER_UID}:${USER_GID} /home/claude/entrypoint.sh && \
     chmod +x /home/claude/entrypoint.sh
 
-USER ${USER_UID}
 ENV PATH="/home/claude/.local/bin:${PATH}"
 
-# Entry point: the in-container dispatcher. entrypoint.sh sets up SSH/gh/mise
-# and then execs the selected agent (Claude/Codex/Aider), passing along any
-# args appended by the host. The agent_sandbox Python package is the *host*
-# orchestrator (it starts and manages this container) and intentionally lives
-# only on the host — it is not installed in, nor invoked by, the image.
+# Container starts as root so the entrypoint can install project-declared apt
+# packages (SANDBOX_APT_PACKAGES) before dropping to the claude user.
+# The entrypoint handles the privilege drop via setpriv(1).
 ENTRYPOINT ["/home/claude/entrypoint.sh"]
