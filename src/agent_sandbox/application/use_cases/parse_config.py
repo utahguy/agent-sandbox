@@ -13,13 +13,14 @@ Lines beginning with ``#`` are comments and are ignored.
 Blank lines are ignored.
 Each non-empty, non-comment line is a *directive*::
 
-    volume   HOST_PATH:CONTAINER_PATH[:mode]
-    port     HOST_PORT:CONTAINER_PORT[/protocol]
-    env      KEY=VALUE
+    volume        HOST_PATH:CONTAINER_PATH[:mode]
+    port          HOST_PORT:CONTAINER_PORT[/protocol]
+    env           KEY=VALUE
     mise
-    memory   VALUE<unit>       # unit: b / k / m / g
-    runtime  auto|docker|podman
-    packages PACKAGE_NAME      # apt package; repeat for multiple packages
+    memory        VALUE<unit>       # unit: b / k / m / g
+    runtime       auto|docker|podman
+    packages      PACKAGE_NAME      # apt package; repeat for multiple packages
+    claude-config PATH              # host Claude config dir for account selection
 
 Examples::
 
@@ -32,12 +33,13 @@ Examples::
     mise
     memory 512m
     runtime docker
+    claude-config ~/.claude-client-acme
 """
 
 from __future__ import annotations
 
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from agent_sandbox.domain.entities import SandboxConfig
@@ -50,7 +52,7 @@ from agent_sandbox.domain.value_objects import (
 from agent_sandbox.exceptions import ErrorCode, SandboxError
 
 # Supported directive names (lower-case)
-_KNOWN_DIRECTIVES = frozenset({"volume", "port", "env", "mise", "memory", "runtime", "packages"})
+_KNOWN_DIRECTIVES = frozenset({"volume", "port", "env", "mise", "memory", "runtime", "packages", "claude-config"})
 
 # Valid apt package name: starts with alnum, remainder is alnum, +, -, or .
 _PACKAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+\-.]*$")
@@ -95,6 +97,7 @@ class ParseConfigUseCase:
         memory_limit: Optional[MemoryLimit] = None
         runtime: RuntimeKind = RuntimeKind.AUTO
         packages: list[str] = []
+        claude_config_dir: Optional[Path] = None
 
         for lineno, raw_line in enumerate(text.splitlines(), start=1):
             line = raw_line.strip()
@@ -130,6 +133,8 @@ class ParseConfigUseCase:
                 runtime = self._parse_runtime(arg, lineno)
             elif directive == "packages":
                 packages.append(self._parse_package(arg, lineno))
+            elif directive == "claude-config":
+                claude_config_dir = self._parse_claude_config(arg, lineno)
 
         return SandboxConfig(
             volumes=volumes,
@@ -139,6 +144,7 @@ class ParseConfigUseCase:
             memory_limit=memory_limit,
             runtime=runtime,
             packages=packages,
+            claude_config_dir=claude_config_dir,
         )
 
     # ------------------------------------------------------------------
@@ -361,3 +367,34 @@ class ParseConfigUseCase:
                 code=ErrorCode.CONFIG_MALFORMED,
             )
         return mapping[key]
+
+    @staticmethod
+    def _parse_claude_config(arg: str, lineno: int) -> Path:
+        """Parse a ``claude-config`` directive into an expanded host :class:`Path`.
+
+        Expected format: an absolute or ``~``-prefixed path pointing to a
+        Claude config directory, e.g. ``~/.claude-client-acme`` or
+        ``/home/alice/.claude-work``.  The ``~`` is expanded via
+        :meth:`pathlib.Path.expanduser`.
+
+        Raises:
+            SandboxError: With code ``CONFIG_MALFORMED`` if the argument is
+                missing or is not an absolute/home-relative path.
+        """
+        if not arg:
+            raise SandboxError(
+                f"Malformed 'claude-config' directive on line {lineno}: "
+                f"expected a path (e.g. claude-config: ~/.claude-acme), got nothing.",
+                code=ErrorCode.CONFIG_MALFORMED,
+            )
+
+        expanded = Path(arg).expanduser()
+
+        if not str(expanded).startswith("/"):
+            raise SandboxError(
+                f"Malformed 'claude-config' directive on line {lineno}: "
+                f"path must be absolute or start with '~', got {arg!r}.",
+                code=ErrorCode.CONFIG_MALFORMED,
+            )
+
+        return expanded

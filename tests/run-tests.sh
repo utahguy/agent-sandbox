@@ -476,6 +476,71 @@ test_no_containerfile_falls_back_to_base() {
     fi
 }
 
+# --- claude-config: directive tests -----------------------------------------
+
+test_claude_config_credentials_mounted_from_named_dir() {
+    local alt_config="${TEST_HOME}/.claude-acme"
+    mkdir -p "${alt_config}"
+    touch "${alt_config}/.credentials.json"
+    echo "claude-config: ${alt_config}" > "${TEST_PROJECT}/.agent-sandbox"
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    assert_volume "${alt_config}/.credentials.json:/home/claude/.claude/.credentials.json:Z" || return 1
+}
+
+test_claude_config_tilde_expanded() {
+    mkdir -p "${TEST_HOME}/.claude-acme"
+    touch "${TEST_HOME}/.claude-acme/.credentials.json"
+    echo "claude-config: ~/.claude-acme" > "${TEST_PROJECT}/.agent-sandbox"
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    assert_volume "${TEST_HOME}/.claude-acme/.credentials.json:/home/claude/.claude/.credentials.json:Z" || return 1
+}
+
+test_claude_config_overrides_default_credentials() {
+    # Default ~/.claude/.credentials.json must NOT be mounted when claude-config: is set
+    mkdir -p "${TEST_HOME}/.claude"
+    touch "${TEST_HOME}/.claude/.credentials.json"
+    local alt_config="${TEST_HOME}/.claude-acme"
+    mkdir -p "${alt_config}"
+    touch "${alt_config}/.credentials.json"
+    echo "claude-config: ${alt_config}" > "${TEST_PROJECT}/.agent-sandbox"
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    assert_volume "${alt_config}/.credentials.json:/home/claude/.claude/.credentials.json:Z" || return 1
+    refute_arg "${TEST_HOME}/.claude/.credentials.json:/home/claude/.claude/.credentials.json:Z" || return 1
+}
+
+test_claude_config_missing_dir_does_not_error() {
+    echo "claude-config: ${TEST_HOME}/.claude-nonexistent" > "${TEST_PROJECT}/.agent-sandbox"
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null 2>&1 || return 1
+}
+
+test_claude_config_settings_mounted_readonly() {
+    local alt_config="${TEST_HOME}/.claude-acme"
+    mkdir -p "${alt_config}"
+    echo '{}' > "${alt_config}/settings.json"
+    echo "claude-config: ${alt_config}" > "${TEST_PROJECT}/.agent-sandbox"
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    # settings.json is copied to a temp dir and mounted at /tmp/claude-settings-src read-only
+    if ! grep -F ":/tmp/claude-settings-src:ro,Z" "$PODMAN_LOG" >/dev/null 2>&1; then
+        echo "    settings.json not mounted r/o at /tmp/claude-settings-src"
+        return 1
+    fi
+}
+
+test_claude_config_coexists_with_other_directives() {
+    local alt_config="${TEST_HOME}/.claude-acme"
+    mkdir -p "${alt_config}"
+    touch "${alt_config}/.credentials.json"
+    cat > "${TEST_PROJECT}/.agent-sandbox" <<EOF
+port: 3000
+claude-config: ${alt_config}
+env: MY_VAR=hello
+EOF
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    assert_arg "3000" || return 1
+    assert_arg "MY_VAR=hello" || return 1
+    assert_volume "${alt_config}/.credentials.json:/home/claude/.claude/.credentials.json:Z" || return 1
+}
+
 # --- Run all -----------------------------------------------------------------
 
 echo "Running agent-sandbox tests..."
@@ -516,6 +581,12 @@ run_test "project Dockerfile used when no Containerfile"      test_project_docke
 run_test "project Containerfile preferred over Dockerfile"    test_project_containerfile_preferred_over_dockerfile
 run_test "derived image name used for podman run"             test_derived_image_used_for_run
 run_test "no Containerfile falls back to base image"          test_no_containerfile_falls_back_to_base
+run_test "claude-config: credentials mounted from named dir"  test_claude_config_credentials_mounted_from_named_dir
+run_test "claude-config: ~ expanded to home dir"              test_claude_config_tilde_expanded
+run_test "claude-config: overrides default ~/.claude creds"   test_claude_config_overrides_default_credentials
+run_test "claude-config: missing dir does not error"          test_claude_config_missing_dir_does_not_error
+run_test "claude-config: settings.json mounted read-only"     test_claude_config_settings_mounted_readonly
+run_test "claude-config: coexists with other directives"      test_claude_config_coexists_with_other_directives
 
 echo
 if [ "$FAIL" -eq 0 ]; then

@@ -27,8 +27,11 @@ flask, django, or any other heavy framework.
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
+import tempfile
 import time
+from pathlib import Path
 
 from agent_sandbox.application.ports import ContainerHandlePort, ContainerPort, RuntimePort
 from agent_sandbox.domain.entities import ExecResult, SandboxConfig
@@ -232,6 +235,61 @@ def _build_memory_arg(memory_limit) -> list[str]:
     return ["-m", f"{memory_limit.value}{memory_limit.unit}"]
 
 
+def _build_claude_config_args(claude_config_dir: Path, tmpdir: str) -> list[str]:
+    """Emit volume mounts for a custom Claude config directory.
+
+    Mirrors the Bash CLI auth-mount logic for the ``claude-config:`` directive:
+
+    - ``~/.credentials.json`` from the named dir is mounted read-write so token
+      refreshes persist back to the host.
+    - ``settings.json`` / ``settings.local.json`` are copied into *tmpdir* and
+      mounted read-only so container writes cannot corrupt the originals.
+
+    The container path for credentials and settings is always
+    ``/home/claude/.claude/…`` because the container user's ``HOME`` is
+    ``/home/claude`` and Claude Code defaults to ``~/.claude``.
+
+    Args:
+        claude_config_dir: Expanded host path to the Claude config directory.
+        tmpdir: Caller-managed temporary directory for settings file copies.
+            The caller must ensure this directory outlives the container start
+            call (bind mounts hold inode references, so the host path may be
+            removed immediately after ``podman/docker run`` returns).
+
+    Returns:
+        Flat list of CLI tokens to append to the ``run`` argument list.
+        Returns an empty list if the directory does not exist (a warning is
+        logged; the container starts without those mounts).
+    """
+    if not claude_config_dir.is_dir():
+        logger.warning(
+            "claude_config_dir_missing path=%s skipping_credential_mounts",
+            claude_config_dir,
+        )
+        return []
+
+    args: list[str] = []
+
+    # Credentials — read-write so token refreshes persist to the host
+    creds = claude_config_dir / ".credentials.json"
+    if creds.is_file():
+        args.extend(["-v", f"{creds}:/home/claude/.claude/.credentials.json:Z"])
+
+    # Settings — copy to tmpdir and mount read-only
+    for src_name, container_path in (
+        ("settings.json", "/tmp/claude-settings-src"),
+        ("settings.local.json", "/tmp/claude-settings-local-src"),
+    ):
+        src = claude_config_dir / src_name
+        if src.is_file():
+            dst = Path(tmpdir) / src_name
+            shutil.copy2(src, dst)
+            dst.chmod(0o644)
+            args.extend(["-v", f"{dst}:{container_path}:ro,Z"])
+
+    return args
+
+
 class CliContainerAdapter:
     """Container lifecycle adapter wrapping ``docker``/``podman`` CLI calls.
 
@@ -295,7 +353,20 @@ class CliContainerAdapter:
             SandboxError: With code ``CONTAINER_START_FAILED`` if the runtime
                 returns a non-zero exit code.
         """
-        args = self._build_run_args(config, image_tag)
+        # Create a temp dir for settings file copies when claude_config_dir is set.
+        # The tmpdir is cleaned up in the finally block after podman/docker run
+        # returns; bind mounts hold inode references so deletion is safe immediately
+        # after the container starts.
+        tmpdir = (
+            tempfile.mkdtemp(prefix="agent-sandbox-claude-cfg-")
+            if config.claude_config_dir is not None
+            else None
+        )
+        try:
+            args = self._build_run_args(config, image_tag, claude_tmpdir=tmpdir)
+        finally:
+            if tmpdir is not None:
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
         logger.info(
             "container_start_requested image_tag=%s volumes=%d ports=%d env_keys=%d",
@@ -375,7 +446,11 @@ class CliContainerAdapter:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_run_args(config: SandboxConfig, image_tag: str) -> list[str]:
+    def _build_run_args(
+        config: SandboxConfig,
+        image_tag: str,
+        claude_tmpdir: str | None = None,
+    ) -> list[str]:
         """Build the ``run`` argument list from *config* and *image_tag*.
 
         Security properties:
@@ -389,6 +464,9 @@ class CliContainerAdapter:
         Args:
             config: Validated sandbox configuration aggregate.
             image_tag: Tag of the image to run.
+            claude_tmpdir: Caller-managed temp directory used by
+                :func:`_build_claude_config_args` for settings file copies.
+                Must be set when ``config.claude_config_dir`` is not ``None``.
 
         Returns:
             Argument list starting with ``"run"`` (the binary is prepended by
@@ -424,6 +502,10 @@ class CliContainerAdapter:
         # Memory limit
         if config.memory_limit is not None:
             args.extend(_build_memory_arg(config.memory_limit))
+
+        # Claude account credentials from a named config directory
+        if config.claude_config_dir is not None and claude_tmpdir is not None:
+            args.extend(_build_claude_config_args(config.claude_config_dir, claude_tmpdir))
 
         # Image tag
         args.append(image_tag)

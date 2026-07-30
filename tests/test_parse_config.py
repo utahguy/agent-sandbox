@@ -528,6 +528,58 @@ class TestSandboxConfigFromFile:
             pytest.fail("FileNotFoundError must be wrapped in SandboxError")
 
 
+# ---------------------------------------------------------------------------
+# 6. claude-config directive
+# ---------------------------------------------------------------------------
+
+class TestClaudeConfigDirective:
+    """ParseConfigUseCase handles the claude-config directive correctly."""
+
+    def _parse(self, text: str):
+        from agent_sandbox.application.use_cases.parse_config import ParseConfigUseCase
+        return ParseConfigUseCase().execute(text)
+
+    def test_absent_directive_yields_none(self):
+        result = self._parse("# no claude-config\n")
+        assert result.claude_config_dir is None
+
+    def test_absolute_path_parsed(self):
+        result = self._parse("claude-config /home/alice/.claude-acme\n")
+        assert result.claude_config_dir == Path("/home/alice/.claude-acme")
+
+    def test_tilde_expanded_to_home(self):
+        result = self._parse("claude-config ~/.claude-acme\n")
+        expected = Path("~/.claude-acme").expanduser()
+        assert result.claude_config_dir == expected
+
+    def test_result_is_path_object(self):
+        result = self._parse("claude-config /tmp/some-config\n")
+        assert isinstance(result.claude_config_dir, Path)
+
+    def test_empty_arg_raises_config_malformed(self):
+        from agent_sandbox.exceptions import SandboxError
+        with pytest.raises(SandboxError) as exc_info:
+            self._parse("claude-config\n")
+        assert exc_info.value.code == "CONFIG_MALFORMED"
+
+    def test_relative_path_raises_config_malformed(self):
+        from agent_sandbox.exceptions import SandboxError
+        with pytest.raises(SandboxError) as exc_info:
+            self._parse("claude-config relative/path\n")
+        assert exc_info.value.code == "CONFIG_MALFORMED"
+
+    def test_coexists_with_other_directives(self):
+        text = (
+            "volume /src:/workspace:rw\n"
+            "claude-config /home/alice/.claude-acme\n"
+            "port 8080:80\n"
+        )
+        result = self._parse(text)
+        assert result.claude_config_dir == Path("/home/alice/.claude-acme")
+        assert len(result.volumes) == 1
+        assert len(result.ports) == 1
+
+
 class TestSandboxConfigFromFileAlias:
     """SandboxConfig.from_file accepts .claude-sandbox as a backward-compat alias."""
 

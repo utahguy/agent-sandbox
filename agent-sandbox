@@ -164,6 +164,22 @@ if [ -n "$PROJECT_CONTAINER_FILE" ]; then
     IMAGE_NAME="${PROJECT_IMAGE_NAME}"
 fi
 
+# --- Pre-scan .agent-sandbox for claude-config: before CLAUDE_CONFIG is resolved ---
+for _prescan_cfg in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandbox"; do
+    if [ -f "${_prescan_cfg}" ]; then
+        while IFS= read -r _prescan_line; do
+            _prescan_line="${_prescan_line%%#*}"
+            _prescan_line="$(echo "$_prescan_line" | xargs)"
+            if [[ "$_prescan_line" =~ ^claude-config:[[:space:]]*(.*) ]]; then
+                CLAUDE_CONFIG_DIR="${BASH_REMATCH[1]/#\~/${HOME}}"
+                break
+            fi
+        done < "${_prescan_cfg}"
+        break
+    fi
+done
+unset _prescan_cfg _prescan_line
+
 # --- Resolve Claude config dir: env var > settings.local.json > default ---
 CLAUDE_CONFIG="${CLAUDE_CONFIG_DIR:-}"
 if [ -z "$CLAUDE_CONFIG" ] && [ -f "${HOME}/.claude/settings.local.json" ]; then
@@ -312,6 +328,10 @@ for config_file in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandb
                 vol="${BASH_REMATCH[1]}"
                 vol="${vol/#\~/$HOME}"
                 VOLUMES+=(-v "$vol")
+                continue
+            fi
+            # claude-config: consumed in the pre-scan above
+            if [[ "$line" =~ ^claude-config:[[:space:]]*(.*) ]]; then
                 continue
             fi
             # Deprecated bare volume mount (no "volume:" prefix)

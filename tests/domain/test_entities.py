@@ -58,6 +58,17 @@ class TestSandboxConfig:
         cfg = SandboxConfig()
         assert cfg.source_filename == ""
 
+    def test_sandbox_config_default_claude_config_dir_is_none(self):
+        from agent_sandbox.domain.entities import SandboxConfig
+        cfg = SandboxConfig()
+        assert cfg.claude_config_dir is None
+
+    def test_sandbox_config_accepts_claude_config_dir(self):
+        from pathlib import Path
+        from agent_sandbox.domain.entities import SandboxConfig
+        cfg = SandboxConfig(claude_config_dir=Path("/home/alice/.claude-acme"))
+        assert cfg.claude_config_dir == Path("/home/alice/.claude-acme")
+
     def test_sandbox_config_accepts_volumes(self):
         from agent_sandbox.domain.entities import SandboxConfig
         from agent_sandbox.domain.value_objects import Volume

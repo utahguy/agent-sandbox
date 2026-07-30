@@ -52,6 +52,10 @@ class SandboxConfig:
         runtime: Which container runtime to use (default: AUTO).
         packages: apt package names to install at container startup (as root,
                   before the agent user session begins).
+        claude_config_dir: Optional host path to a Claude config directory.
+            When set, overrides the default ``~/.claude`` as the source for
+            credential and settings mounts, enabling per-project account
+            selection.  ``None`` means use the runtime default.
         config_path: Filesystem path of the config file that was parsed
                      (provenance; None when constructed programmatically).
         source_filename: Basename of the config file (e.g. ``.agent-sandbox``).
@@ -64,6 +68,7 @@ class SandboxConfig:
     memory_limit: Optional[MemoryLimit] = None
     runtime: RuntimeKind = RuntimeKind.AUTO
     packages: list[str] = field(default_factory=list)
+    claude_config_dir: Optional[Path] = None
     config_path: Optional[Path] = None
     source_filename: str = ""
 
