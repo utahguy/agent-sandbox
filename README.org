@@ -341,6 +341,36 @@ Use =packages:= when you are experimenting or the package is rarely
 needed.  Use a project =Containerfile= for anything installed every
 run.
 
+* Docker Compose Integration
+
+If your project has a =docker-compose.yml=, =docker-compose.yaml=,
+=compose.yml=, or =compose.yaml= in its root, agent-sandbox starts
+those services automatically before launching the agent:
+
+1. Starts the Podman socket if it is not already running
+2. Runs =podman compose up -d= to bring up project services
+3. Attaches the sandbox container to the same networks as the compose
+   services so the agent can reach them by hostname
+
+This means the agent can talk to a local database, message broker,
+mock API server, or any other service your project depends on — with
+no manual setup.
+
+#+begin_src yaml
+# compose.yml
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: dev
+  redis:
+    image: redis:7
+#+end_src
+
+With this file present, the agent can connect to =db:5432= and
+=redis:6379= directly.  No port mappings or extra configuration
+required.
+
 * MCP Server Integration
 
 To make MCP servers available to Claude Code inside the container,
