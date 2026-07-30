@@ -179,6 +179,27 @@ claude login
 Auth tokens (~.claude.json~, ~.credentials.json~) are mounted
 read-write into the container so token refreshes persist.
 
+*** Multiple accounts
+
+If you work with multiple clients, each with their own Claude
+subscription, keep a separate config directory per account:
+
+#+begin_src bash
+CLAUDE_CONFIG_DIR=~/.claude-client-acme claude login   # first time only
+CLAUDE_CONFIG_DIR=~/.claude-client-beta claude login   # first time only
+#+end_src
+
+Then point each project at the right account via its ~.agent-sandbox~:
+
+#+begin_src conf
+claude-config: ~/.claude-client-acme
+#+end_src
+
+Credentials from that directory are mounted read-write (so token
+refreshes persist) and settings files read-only, exactly like the
+default auth flow.  The host's default =~/.claude= is ignored when
+=claude-config= is set.
+
 ** Codex
 
 The ~.codex/~ directory is mounted read-write.  On first run, Codex
@@ -269,7 +290,23 @@ memory: 8g
 
 # Container runtime (auto-detected if omitted)
 runtime: auto
+
+# Claude account to use (default: ~/.claude)
+claude-config: ~/.claude-client-acme
 #+end_src
+
+Supported directives:
+
+| Directive      | Format                          | Purpose                                      |
+|----------------+---------------------------------+----------------------------------------------|
+| =volume=       | =HOST:CONTAINER[:mode]=         | Extra bind mount (=ro= or =rw=, default =rw=) |
+| =port=         | =HOST[:CONTAINER[/proto]]=      | Port mapping (default proto: =tcp=)          |
+| =env=          | =KEY=VALUE=                     | Container environment variable               |
+| =mise=         | (no value)                      | Enable mise toolchain install at startup     |
+| =memory=       | =<integer><unit>= (b/k/m/g)    | Container memory limit                       |
+| =runtime=      | =auto= / =docker= / =podman=   | Override container runtime                   |
+| =packages=     | =PACKAGE_NAME=                  | apt package to install at startup            |
+| =claude-config= | =PATH=                         | Host Claude config dir for account selection |
 
 For backwards compatibility, ~.claude-sandbox~ is also recognized.
 
@@ -306,7 +343,7 @@ mobile device testing from inside the container.
 | SSH keys           | read-only  | Symlinked; =known_hosts= copied writable   |
 | SSH agent socket   | read-write | Forwarded via =$SSH_AUTH_SOCK=             |
 | GitHub CLI config  | read-only  | Copied writable at startup                 |
-| Claude auth tokens | read-write | Token refreshes persist to host            |
+| Claude auth tokens | read-write | From =~/.claude= or =claude-config= dir   |
 | Codex auth         | read-write | Login persists to host                     |
 | Claude sessions    | read-write | Stored in =PROJECT/.claude-sessions/=      |
 | Mise cache         | read-write | Shared at =~/.local/share/agent-sandbox-mise/= |
@@ -320,7 +357,7 @@ mobile device testing from inside the container.
 python -m pytest tests/ -v
 #+end_src
 
-579 tests covering domain entities, value objects, application ports,
+587 tests covering domain entities, value objects, application ports,
 use cases, infrastructure adapters, CLI, facade, and E2E steel thread.
 
 ** Bash CLI tests
