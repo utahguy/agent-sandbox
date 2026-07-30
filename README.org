@@ -309,10 +309,37 @@ Supported directives:
 | =mise=         | (no value)                      | Enable mise toolchain install at startup     |
 | =memory=       | =<integer><unit>= (b/k/m/g)    | Container memory limit                       |
 | =runtime=      | =auto= / =docker= / =podman=   | Override container runtime                   |
-| =packages=     | =PACKAGE_NAME=                  | apt package to install at startup            |
+| =packages=     | =PACKAGE_NAME=                  | apt package to install at startup (see note) |
 | =claude-config= | =PATH=                         | Host Claude config dir for account selection |
 
 For backwards compatibility, ~.claude-sandbox~ is also recognized.
+
+** System packages: =packages:= vs project =Containerfile=
+
+=packages:= installs apt packages as root at *every container start*
+before the agent session begins.  It is convenient for occasional use
+but pays the full =apt-get update= + install cost each time.
+
+For packages you need consistently, bake them into a project-specific
+image instead.  Drop a =Containerfile= in your project root:
+
+#+begin_src dockerfile
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+#+end_src
+
+agent-sandbox detects the =Containerfile=, builds a derived image
+tagged to your project, and uses it automatically.  The image rebuilds
+only when the =Containerfile= changes or the base image is updated —
+container starts are then instant.
+
+Use =packages:= when you are experimenting or the package is rarely
+needed.  Use a project =Containerfile= for anything installed every
+run.
 
 * MCP Server Integration
 
