@@ -291,6 +291,10 @@ memory: 8g
 # Container runtime (auto-detected if omitted)
 runtime: auto
 
+# apt packages to install at container startup
+packages: postgresql-client
+packages: ffmpeg
+
 # Claude account to use (default: ~/.claude)
 claude-config: ~/.claude-client-acme
 #+end_src
