@@ -1116,3 +1116,104 @@ class TestContainerAdapterImportPurity:
                 if node.module:
                     top = node.module.split(".")[0]
                     assert top not in forbidden
+
+
+class TestComposeNetworkConnect:
+    """CliContainerAdapter: network connect issued when compose_file is set."""
+
+    def test_network_connect_called_when_compose_file_set(self, tmp_path):
+        """start() issues 'network connect <network> <container_id>' after run."""
+        from agent_sandbox.infrastructure.container_adapter import CliContainerAdapter
+        from agent_sandbox.domain.entities import SandboxConfig
+        from pathlib import Path
+
+        # Write a minimal compose file with a project name
+        compose_file = tmp_path / "compose.yml"
+        compose_file.write_text("name: myproject\nservices:\n  web:\n    image: nginx\n")
+
+        config = SandboxConfig(compose_file=compose_file)
+
+        calls = []
+
+        class FakeRuntime:
+            def run_cli(self, args, timeout=None):
+                calls.append(list(args))
+                if args[0] == "run":
+                    return 0, "fake-container-abc\n", ""
+                return 0, "", ""
+
+            def _build_args(self, args):
+                return args
+
+        adapter = CliContainerAdapter(runtime_port=FakeRuntime())
+        adapter.start(config, "agent-sandbox:test")
+
+        network_calls = [c for c in calls if c[0] == "network"]
+        assert len(network_calls) == 1, f"Expected 1 network call, got: {network_calls}"
+        assert network_calls[0] == ["network", "connect", "myproject_default", "fake-container-abc"]
+
+    def test_network_name_derived_from_compose_name_field(self, tmp_path):
+        """_derive_compose_network reads 'name:' from compose YAML."""
+        from agent_sandbox.infrastructure.container_adapter import _derive_compose_network
+        compose_file = tmp_path / "compose.yml"
+        compose_file.write_text("name: aef\nservices: {}\n")
+        assert _derive_compose_network(compose_file) == "aef_default"
+
+    def test_network_name_falls_back_to_directory_name(self, tmp_path):
+        """_derive_compose_network falls back to parent dir name when no 'name:' field."""
+        from agent_sandbox.infrastructure.container_adapter import _derive_compose_network
+        subdir = tmp_path / "myproject"
+        subdir.mkdir()
+        compose_file = subdir / "compose.yml"
+        compose_file.write_text("services:\n  web:\n    image: nginx\n")
+        assert _derive_compose_network(compose_file) == "myproject_default"
+
+    def test_no_network_connect_when_compose_file_not_set(self):
+        """start() does not issue any 'network' CLI call when compose_file is None."""
+        from agent_sandbox.infrastructure.container_adapter import CliContainerAdapter
+        from agent_sandbox.domain.entities import SandboxConfig
+
+        config = SandboxConfig()  # compose_file=None by default
+
+        calls = []
+
+        class FakeRuntime:
+            def run_cli(self, args, timeout=None):
+                calls.append(list(args))
+                if args[0] == "run":
+                    return 0, "cid\n", ""
+                return 0, "", ""
+
+            def _build_args(self, args):
+                return args
+
+        adapter = CliContainerAdapter(runtime_port=FakeRuntime())
+        adapter.start(config, "agent-sandbox:test")
+
+        network_calls = [c for c in calls if c[0] == "network"]
+        assert network_calls == [], f"Unexpected network calls: {network_calls}"
+
+    def test_network_connect_failure_does_not_raise(self, tmp_path):
+        """A non-zero exit from 'network connect' is logged but does not abort start."""
+        from agent_sandbox.infrastructure.container_adapter import CliContainerAdapter
+        from agent_sandbox.domain.entities import SandboxConfig
+
+        compose_file = tmp_path / "compose.yml"
+        compose_file.write_text("name: testproject\nservices: {}\n")
+        config = SandboxConfig(compose_file=compose_file)
+
+        class FakeRuntime:
+            def run_cli(self, args, timeout=None):
+                if args[0] == "run":
+                    return 0, "cid\n", ""
+                if args[0] == "network":
+                    return 1, "", "network testproject_default not found"
+                return 0, "", ""
+
+            def _build_args(self, args):
+                return args
+
+        adapter = CliContainerAdapter(runtime_port=FakeRuntime())
+        # Must not raise even though network connect returns exit code 1
+        handle = adapter.start(config, "agent-sandbox:test")
+        assert handle.container_id == "cid"
