@@ -33,6 +33,19 @@ see conversation for full list):
 - No per-agent env file loading
 - No ~AGENT_SANDBOX_IMAGE~/~AGENT_SANDBOX_EXTRA~ overrides
 
+** =.agent-sandbox= directive syntax also diverges between the two
+
+Both implementations read the *same* =.agent-sandbox= filename but use
+different directive syntax: the Bash script requires a colon
+(~compose: path~, matching its ~volume:~/~port:~/~env:~ convention),
+while the Python library's =parse_config.py= uses whitespace-separated
+syntax with no colon (~compose path~). A config line written for one
+raises "Unknown directive" (or is silently misread) in the other. This
+predates the =compose:= directive work — it's true of every directive,
+not just that one — but is worth resolving (pick one syntax, or make
+both parsers accept either) before adding more directives to either
+side, and especially before Project 2 needs a config format.
+
 * The two-project reframing
 
 Rather than trying to make the Python library a drop-in Bash-script
