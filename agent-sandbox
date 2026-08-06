@@ -18,7 +18,8 @@
 # Lines prefixed with "env:" set environment variables, e.g.:
 #   env: SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxx
 # A line prefixed with "compose:" points at a Compose YAML file to start
-# and join the sandbox to, overriding auto-detection, e.g.:
+# and join the sandbox to. Project services are only started when this
+# directive is present, e.g.:
 #   compose: server/compose.yml
 #
 # Per-agent env vars: ~/.config/agent-sandbox/<agent>.env
@@ -379,20 +380,10 @@ for config_file in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandb
     fi
 done
 
-# Start project services if a compose file exists (explicit "compose:"
-# directive — already validated in the pre-scan above — takes precedence
-# over auto-detection).
+# Start project services only if an explicit "compose:" directive is
+# present in .agent-sandbox — already validated in the pre-scan above.
 EXTRA_COMPOSE_ARGS=()
-COMPOSE_FILE="$COMPOSE_DIRECTIVE"
-if [ -z "$COMPOSE_FILE" ]; then
-    for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
-        if [ -f "${PROJECT_DIR}/${f}" ]; then
-            COMPOSE_FILE="${PROJECT_DIR}/${f}"
-            break
-        fi
-    done
-fi
-if [ -n "$COMPOSE_FILE" ]; then
+if [ -n "$COMPOSE_DIRECTIVE" ]; then
     # Ensure the Podman socket is running (required by the compose provider)
     if [ -z "$RUN_AS_USER" ]; then
         if ! systemctl --user is-active podman.socket &>/dev/null; then
@@ -403,13 +394,13 @@ if [ -n "$COMPOSE_FILE" ]; then
             sudo -u "$RUN_AS_USER" systemctl --user start podman.socket
         fi
     fi
-    echo "Starting project services ($(basename "$COMPOSE_FILE"))..."
+    echo "Starting project services ($(basename "$COMPOSE_DIRECTIVE"))..."
     # Must use podman compose so services share the same runtime as the sandbox
-    run_podman compose -f "$COMPOSE_FILE" up -d
+    run_podman compose -f "$COMPOSE_DIRECTIVE" up -d
     # Connect the sandbox to the networks used by compose services.
     # Get container IDs, then inspect them for network names.
     # Note: can't use xargs with run_podman since it's a shell function.
-    COMPOSE_CONTAINER_IDS="$(run_podman compose -f "$COMPOSE_FILE" ps -q 2>/dev/null)"
+    COMPOSE_CONTAINER_IDS="$(run_podman compose -f "$COMPOSE_DIRECTIVE" ps -q 2>/dev/null)"
     if [ -n "$COMPOSE_CONTAINER_IDS" ]; then
         while IFS= read -r net; do
             { [ -z "$net" ] || [ "$net" = "podman" ]; } && continue
