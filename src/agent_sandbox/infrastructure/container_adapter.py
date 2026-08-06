@@ -27,7 +27,9 @@ flask, django, or any other heavy framework.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
+import warnings
 import subprocess
 import tempfile
 import time
@@ -290,6 +292,35 @@ def _build_claude_config_args(claude_config_dir: Path, tmpdir: str) -> list[str]
     return args
 
 
+def _derive_compose_network(compose_file: Path) -> str:
+    """Derive the default Compose network name from a compose file.
+
+    Returns ``<project_name>_default``.  The project name is taken from the
+    top-level ``name:`` field in the YAML if present; otherwise it falls back
+    to the compose file's parent directory name (lower-cased), matching
+    Docker Compose / Podman Compose default behavior.
+
+    Args:
+        compose_file: Absolute path to the compose YAML file.
+
+    Returns:
+        The inferred default network name, e.g. ``aef_default``.
+    """
+    try:
+        text = compose_file.read_text()
+        # Match bare or single/double-quoted name values; strip surrounding quotes.
+        match = re.search(
+            r"""^name:\s+(?P<q>['"]?)(?P<name>[^\r\n#]+?)(?P=q)\s*$""",
+            text,
+            re.MULTILINE,
+        )
+        if match:
+            return f"{match.group('name').strip()}_default"
+    except OSError:
+        pass
+    return f"{compose_file.parent.name.lower()}_default"
+
+
 class CliContainerAdapter:
     """Container lifecycle adapter wrapping ``docker``/``podman`` CLI calls.
 
@@ -405,6 +436,33 @@ class CliContainerAdapter:
             container_id,
             image_tag,
         )
+
+        # Join the Compose project's default network if configured
+        if config.compose_file is not None:
+            network = _derive_compose_network(config.compose_file)
+            logger.info(
+                "compose_network_connect container_id=%s network=%s",
+                container_id,
+                network,
+            )
+            net_exit, _net_out, net_stderr = self._runtime.run_cli(
+                ["network", "connect", network, container_id]
+            )
+            if net_exit != 0:
+                msg = (
+                    f"[agent-sandbox] Failed to join Compose network {network!r}: "
+                    f"{net_stderr.strip() or 'unknown error'}. "
+                    f"Container {container_id!r} started but cannot reach services "
+                    f"in that network."
+                )
+                warnings.warn(msg, RuntimeWarning, stacklevel=2)
+                logger.warning(
+                    "compose_network_connect_failed container_id=%s network=%s detail=%r",
+                    container_id,
+                    network,
+                    net_stderr.strip(),
+                )
+
         return CliContainerHandle(
             container_id=container_id,
             image_tag=image_tag,

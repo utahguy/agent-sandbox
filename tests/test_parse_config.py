@@ -701,3 +701,44 @@ class TestFileConfigSourceImportPurity:
                     assert top not in forbidden, (
                         f"file_config_source.py must not import from '{top}'"
                     )
+
+
+class TestComposeDirective:
+    """ParseConfigUseCase: 'compose' directive sets compose_file on SandboxConfig."""
+
+    def test_compose_absolute_path(self):
+        from agent_sandbox.application.use_cases.parse_config import ParseConfigUseCase
+        uc = ParseConfigUseCase()
+        config = uc.execute("compose /srv/project/compose.yml\n")
+        from pathlib import Path
+        assert config.compose_file == Path("/srv/project/compose.yml")
+
+    def test_compose_relative_path_stored_as_path(self):
+        from agent_sandbox.application.use_cases.parse_config import ParseConfigUseCase
+        uc = ParseConfigUseCase()
+        config = uc.execute("compose server/compose.yml\n")
+        from pathlib import Path
+        assert config.compose_file == Path("server/compose.yml")
+
+    def test_compose_missing_arg_raises(self):
+        from agent_sandbox.application.use_cases.parse_config import ParseConfigUseCase
+        from agent_sandbox.exceptions import ErrorCode, SandboxError
+        uc = ParseConfigUseCase()
+        with pytest.raises(SandboxError) as exc_info:
+            uc.execute("compose\n")
+        assert exc_info.value.code == ErrorCode.CONFIG_MALFORMED
+
+    def test_compose_none_by_default(self):
+        from agent_sandbox.application.use_cases.parse_config import ParseConfigUseCase
+        uc = ParseConfigUseCase()
+        config = uc.execute("")
+        assert config.compose_file is None
+
+    def test_compose_relative_resolved_by_from_file(self, tmp_path):
+        """from_file() resolves relative compose paths against the config dir."""
+        from agent_sandbox.domain.entities import SandboxConfig
+        config_file = tmp_path / ".agent-sandbox"
+        config_file.write_text("compose server/compose.yml\n")
+        config = SandboxConfig.from_file(config_file)
+        from pathlib import Path
+        assert config.compose_file == (tmp_path / "server" / "compose.yml").resolve()

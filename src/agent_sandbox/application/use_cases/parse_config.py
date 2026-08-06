@@ -21,6 +21,7 @@ Each non-empty, non-comment line is a *directive*::
     runtime       auto|docker|podman
     packages      PACKAGE_NAME      # apt package; repeat for multiple packages
     claude-config PATH              # host Claude config dir for account selection
+    compose       PATH              # host path to a Compose YAML file
 
 Examples::
 
@@ -34,6 +35,7 @@ Examples::
     memory 512m
     runtime docker
     claude-config ~/.claude-client-acme
+    compose server/compose.yml
 """
 
 from __future__ import annotations
@@ -52,7 +54,7 @@ from agent_sandbox.domain.value_objects import (
 from agent_sandbox.exceptions import ErrorCode, SandboxError
 
 # Supported directive names (lower-case)
-_KNOWN_DIRECTIVES = frozenset({"volume", "port", "env", "mise", "memory", "runtime", "packages", "claude-config"})
+_KNOWN_DIRECTIVES = frozenset({"volume", "port", "env", "mise", "memory", "runtime", "packages", "claude-config", "compose"})
 
 # Valid apt package name: starts with alnum, remainder is alnum, +, -, or .
 _PACKAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+\-.]*$")
@@ -98,6 +100,7 @@ class ParseConfigUseCase:
         runtime: RuntimeKind = RuntimeKind.AUTO
         packages: list[str] = []
         claude_config_dir: Optional[Path] = None
+        compose_file: Optional[Path] = None
 
         for lineno, raw_line in enumerate(text.splitlines(), start=1):
             line = raw_line.strip()
@@ -135,6 +138,8 @@ class ParseConfigUseCase:
                 packages.append(self._parse_package(arg, lineno))
             elif directive == "claude-config":
                 claude_config_dir = self._parse_claude_config(arg, lineno)
+            elif directive == "compose":
+                compose_file = self._parse_compose(arg, lineno)
 
         return SandboxConfig(
             volumes=volumes,
@@ -145,6 +150,7 @@ class ParseConfigUseCase:
             runtime=runtime,
             packages=packages,
             claude_config_dir=claude_config_dir,
+            compose_file=compose_file,
         )
 
     # ------------------------------------------------------------------
@@ -381,14 +387,7 @@ class ParseConfigUseCase:
             SandboxError: With code ``CONFIG_MALFORMED`` if the argument is
                 missing or is not an absolute/home-relative path.
         """
-        if not arg:
-            raise SandboxError(
-                f"Malformed 'claude-config' directive on line {lineno}: "
-                f"expected a path (e.g. claude-config: ~/.claude-acme), got nothing.",
-                code=ErrorCode.CONFIG_MALFORMED,
-            )
-
-        expanded = Path(arg).expanduser()
+        expanded = ParseConfigUseCase._parse_path_arg("claude-config", arg, lineno)
 
         if not str(expanded).startswith("/"):
             raise SandboxError(
@@ -398,3 +397,27 @@ class ParseConfigUseCase:
             )
 
         return expanded
+
+    @staticmethod
+    def _parse_path_arg(directive: str, arg: str, lineno: int) -> Path:
+        """Validate *arg* is non-empty then return ``Path(arg).expanduser()``.
+
+        Shared by any directive whose value is a host filesystem path.
+        Relative-path resolution (when needed) is the caller's responsibility.
+        """
+        if not arg:
+            raise SandboxError(
+                f"Malformed {directive!r} directive on line {lineno}: "
+                f"expected a path, got nothing.",
+                code=ErrorCode.CONFIG_MALFORMED,
+            )
+        return Path(arg).expanduser()
+
+    @staticmethod
+    def _parse_compose(arg: str, lineno: int) -> Path:
+        """Parse a ``compose`` directive into a host :class:`Path`.
+
+        Relative paths are resolved against the config file's directory by
+        :meth:`SandboxConfig.from_file` after parsing.
+        """
+        return ParseConfigUseCase._parse_path_arg("compose", arg, lineno)

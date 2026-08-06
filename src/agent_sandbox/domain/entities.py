@@ -56,6 +56,11 @@ class SandboxConfig:
             When set, overrides the default ``~/.claude`` as the source for
             credential and settings mounts, enabling per-project account
             selection.  ``None`` means use the runtime default.
+        compose_file: Optional host path to a Docker/Podman Compose file.
+            When set, the container is connected to the Compose project's
+            default network (``<project_name>_default``) immediately after
+            startup, giving the agent access to services defined in that
+            Compose stack.  ``None`` means no automatic network join.
         config_path: Filesystem path of the config file that was parsed
                      (provenance; None when constructed programmatically).
         source_filename: Basename of the config file (e.g. ``.agent-sandbox``).
@@ -69,6 +74,7 @@ class SandboxConfig:
     runtime: RuntimeKind = RuntimeKind.AUTO
     packages: list[str] = field(default_factory=list)
     claude_config_dir: Optional[Path] = None
+    compose_file: Optional[Path] = None
     config_path: Optional[Path] = None
     source_filename: str = ""
 
@@ -109,6 +115,10 @@ class SandboxConfig:
         # Stamp provenance
         config.config_path = resolved
         config.source_filename = resolved.name
+
+        # Resolve relative compose_file path against the config file's directory
+        if config.compose_file is not None and not config.compose_file.is_absolute():
+            config.compose_file = (resolved.parent / config.compose_file).resolve()
 
         return config
 

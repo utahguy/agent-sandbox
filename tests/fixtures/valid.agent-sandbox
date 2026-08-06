@@ -21,3 +21,6 @@ memory 512m
 
 # Container runtime: runtime auto|docker|podman
 runtime docker
+
+# Compose network join: auto-connect container to the Compose project network
+# compose /path/to/server/compose.yml
