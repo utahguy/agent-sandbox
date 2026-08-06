@@ -574,16 +574,27 @@ test_compose_directive_tilde_expansion() {
     assert_compose_arg "${TEST_HOME}/shared/compose.yml" || return 1
 }
 
-test_compose_directive_overrides_autodetect() {
-    # Auto-detected file at the project root...
+test_compose_directive_used_even_with_root_file_present() {
+    # A compose.yml at the project root must NOT be auto-detected...
     touch "${TEST_PROJECT}/compose.yml"
-    # ...but the directive points elsewhere and must win.
+    # ...only the explicit directive's target is started.
     mkdir -p "${TEST_PROJECT}/alt"
     touch "${TEST_PROJECT}/alt/compose.yml"
     echo "compose: alt/compose.yml" > "${TEST_PROJECT}/.agent-sandbox"
     "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
     assert_compose_arg "${TEST_PROJECT}/alt/compose.yml" || return 1
     refute_compose_arg "${TEST_PROJECT}/compose.yml" || return 1
+}
+
+test_compose_no_directive_does_not_autostart() {
+    # A compose.yml at the project root with no "compose:" directive in
+    # .agent-sandbox must not start any services at all.
+    touch "${TEST_PROJECT}/compose.yml"
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    if [ -f "$COMPOSE_LOG" ]; then
+        echo "    compose was invoked even though no compose: directive was set"
+        return 1
+    fi
 }
 
 test_compose_directive_missing_file_errors() {
@@ -677,7 +688,8 @@ run_test "claude-config: settings.json mounted read-only"     test_claude_config
 run_test "claude-config: coexists with other directives"      test_claude_config_coexists_with_other_directives
 run_test "compose: directive resolves relative path"          test_compose_directive_relative_path
 run_test "compose: directive expands leading ~"                test_compose_directive_tilde_expansion
-run_test "compose: directive overrides auto-detection"         test_compose_directive_overrides_autodetect
+run_test "compose: directive used even with root file present" test_compose_directive_used_even_with_root_file_present
+run_test "no compose: directive does not auto-start services"  test_compose_no_directive_does_not_autostart
 run_test "compose: directive errors when file missing"         test_compose_directive_missing_file_errors
 run_test "compose: missing file fails before image build"      test_compose_directive_missing_file_fails_before_build
 run_test "compose: duplicate directive warns, last one wins"    test_compose_directive_duplicate_warns_and_last_wins

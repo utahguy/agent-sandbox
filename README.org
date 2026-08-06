@@ -298,7 +298,7 @@ packages: ffmpeg
 # Claude account to use (default: ~/.claude)
 claude-config: ~/.claude-client-acme
 
-# Compose file to start and join the sandbox to (overrides auto-detection)
+# Compose file to start and join the sandbox to
 compose: server/compose.yml
 #+end_src
 
@@ -314,7 +314,7 @@ Supported directives:
 | =runtime=      | =auto= / =docker= / =podman=   | Override container runtime                   |
 | =packages=     | =PACKAGE_NAME=                  | apt package to install at startup (see note) |
 | =claude-config= | =PATH=                         | Host Claude config dir for account selection |
-| =compose=      | =PATH=                          | Compose file to start/join (overrides auto-detection of =compose.yml= etc.) |
+| =compose=      | =PATH=                          | Compose file to start/join; project services only start when set |
 
 For backwards compatibility, ~.claude-sandbox~ is also recognized.
 
@@ -353,9 +353,9 @@ run.
 
 * Docker Compose Integration
 
-If your project has a =docker-compose.yml=, =docker-compose.yaml=,
-=compose.yml=, or =compose.yaml= in its root, agent-sandbox starts
-those services automatically before launching the agent:
+If =.agent-sandbox= has a =compose:= directive pointing at a Compose
+file, agent-sandbox starts those services automatically before
+launching the agent:
 
 1. Starts the Podman socket if it is not already running
 2. Runs =podman compose up -d= to bring up project services
@@ -365,6 +365,11 @@ those services automatically before launching the agent:
 This means the agent can talk to a local database, message broker,
 mock API server, or any other service your project depends on — with
 no manual setup.
+
+#+begin_src conf
+# .agent-sandbox
+compose: compose.yml
+#+end_src
 
 #+begin_src yaml
 # compose.yml
@@ -377,23 +382,22 @@ services:
     image: redis:7
 #+end_src
 
-With this file present, the agent can connect to =db:5432= and
+With this directive present, the agent can connect to =db:5432= and
 =redis:6379= directly.  No port mappings or extra configuration
 required.
 
-If your compose file lives somewhere other than the project root
-(e.g. a monorepo with the compose file under a subdirectory), point
-at it explicitly with the =compose:= directive in =.agent-sandbox=
-instead of relying on auto-detection:
+The path is resolved relative to the project root (=~= is expanded to
+your home directory), so a compose file elsewhere in the repo (e.g. a
+monorepo with the compose file under a subdirectory) works the same
+way:
 
 #+begin_src conf
 compose: server/compose.yml
 #+end_src
 
-The path is resolved relative to the project root (=~= is expanded to
-your home directory); an explicit =compose:= directive always takes
-precedence over auto-detected =compose.yml=/=docker-compose.yml=
-files.
+Without a =compose:= directive, no project services are started —
+agent-sandbox no longer auto-detects =compose.yml=,
+=docker-compose.yml=, etc. in the project root.
 
 * MCP Server Integration
 
