@@ -79,48 +79,40 @@ teardown_test() {
 
 # --- Assertions --------------------------------------------------------------
 
-# Assert PODMAN_LOG contains a line matching needle exactly.
-assert_arg() {
-    local needle="$1"
-    if ! grep -qxF -- "$needle" "$PODMAN_LOG" 2>/dev/null; then
+# Assert `log_file` contains a line matching `needle` exactly.
+assert_log_line() {
+    local log_file="$1" needle="$2"
+    if ! grep -qxF -- "$needle" "$log_file" 2>/dev/null; then
         echo "    expected arg: $needle"
-        echo "    actual argv:"
-        sed 's/^/      /' "$PODMAN_LOG" 2>/dev/null || echo "      (no log)"
+        echo "    actual argv (${log_file}):"
+        sed 's/^/      /' "$log_file" 2>/dev/null || echo "      (no log)"
         return 1
     fi
 }
 
-# Assert PODMAN_LOG does NOT contain a line matching needle.
-refute_arg() {
-    local needle="$1"
-    if grep -qxF -- "$needle" "$PODMAN_LOG" 2>/dev/null; then
-        echo "    unexpected arg present: $needle"
+# Assert `log_file` does NOT contain a line matching `needle`.
+refute_log_line() {
+    local log_file="$1" needle="$2"
+    if grep -qxF -- "$needle" "$log_file" 2>/dev/null; then
+        echo "    unexpected arg present in ${log_file}: $needle"
         return 1
     fi
 }
+
+# Assert PODMAN_LOG contains a line matching needle exactly.
+assert_arg() { assert_log_line "$PODMAN_LOG" "$1"; }
+
+# Assert PODMAN_LOG does NOT contain a line matching needle.
+refute_arg() { refute_log_line "$PODMAN_LOG" "$1"; }
 
 # Assert a -v VOLUME arg is present (checks the value line, not the -v).
 assert_volume() { assert_arg "$1"; }
 
 # Assert COMPOSE_LOG contains a line matching needle exactly.
-assert_compose_arg() {
-    local needle="$1"
-    if ! grep -qxF -- "$needle" "$COMPOSE_LOG" 2>/dev/null; then
-        echo "    expected compose arg: $needle"
-        echo "    actual compose argv:"
-        sed 's/^/      /' "$COMPOSE_LOG" 2>/dev/null || echo "      (no log)"
-        return 1
-    fi
-}
+assert_compose_arg() { assert_log_line "$COMPOSE_LOG" "$1"; }
 
 # Assert COMPOSE_LOG does NOT contain a line matching needle.
-refute_compose_arg() {
-    local needle="$1"
-    if grep -qxF -- "$needle" "$COMPOSE_LOG" 2>/dev/null; then
-        echo "    unexpected compose arg present: $needle"
-        return 1
-    fi
-}
+refute_compose_arg() { refute_log_line "$COMPOSE_LOG" "$1"; }
 
 # --- Test runner -------------------------------------------------------------
 
@@ -602,6 +594,41 @@ test_compose_directive_missing_file_errors() {
     fi
 }
 
+test_compose_directive_missing_file_fails_before_build() {
+    # Force both the base and any derived image to look missing, so a build
+    # would normally be triggered — the missing compose: file must be caught
+    # before that build ever runs.
+    setup_build_logging_podman
+    touch "${TEST_TMP}/image_missing"
+    echo "compose: does-not-exist.yml" > "${TEST_PROJECT}/.agent-sandbox"
+    if "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null 2>&1; then
+        echo "    expected nonzero exit when compose: file is missing"
+        return 1
+    fi
+    if [ -f "$BUILD_LOG" ]; then
+        echo "    image build was invoked even though the compose file is missing"
+        return 1
+    fi
+}
+
+test_compose_directive_duplicate_warns_and_last_wins() {
+    mkdir -p "${TEST_PROJECT}/a" "${TEST_PROJECT}/b"
+    touch "${TEST_PROJECT}/a/compose.yml" "${TEST_PROJECT}/b/compose.yml"
+    cat > "${TEST_PROJECT}/.agent-sandbox" <<EOF
+compose: a/compose.yml
+compose: b/compose.yml
+EOF
+    local stderr_output
+    stderr_output="$("$AGENT_SANDBOX" "$TEST_PROJECT" 2>&1 >/dev/null)" || return 1
+    if ! echo "$stderr_output" | grep -q "multiple 'compose:' directives"; then
+        echo "    expected a duplicate-directive warning, got:"
+        echo "$stderr_output"
+        return 1
+    fi
+    assert_compose_arg "${TEST_PROJECT}/b/compose.yml" || return 1
+    refute_compose_arg "${TEST_PROJECT}/a/compose.yml" || return 1
+}
+
 # --- Run all -----------------------------------------------------------------
 
 echo "Running agent-sandbox tests..."
@@ -652,6 +679,8 @@ run_test "compose: directive resolves relative path"          test_compose_direc
 run_test "compose: directive expands leading ~"                test_compose_directive_tilde_expansion
 run_test "compose: directive overrides auto-detection"         test_compose_directive_overrides_autodetect
 run_test "compose: directive errors when file missing"         test_compose_directive_missing_file_errors
+run_test "compose: missing file fails before image build"      test_compose_directive_missing_file_fails_before_build
+run_test "compose: duplicate directive warns, last one wins"    test_compose_directive_duplicate_warns_and_last_wins
 
 echo
 if [ "$FAIL" -eq 0 ]; then
