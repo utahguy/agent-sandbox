@@ -97,6 +97,34 @@ PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 
 IMAGE_NAME="${AGENT_SANDBOX_IMAGE:-agent-sandbox}-${TARGET_UID}"
 
+# --- Pre-scan .agent-sandbox for compose: before any image build, so a
+# missing compose file (or a stray duplicate directive) fails fast instead
+# of after a potentially multi-minute image build. ---
+COMPOSE_DIRECTIVE=""
+for _prescan_cfg in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandbox"; do
+    if [ -f "${_prescan_cfg}" ]; then
+        while IFS= read -r _prescan_line; do
+            _prescan_line="${_prescan_line%%#*}"
+            _prescan_line="$(echo "$_prescan_line" | xargs)"
+            if [[ "$_prescan_line" =~ ^compose:[[:space:]]*(.*) ]]; then
+                _compose_path="${BASH_REMATCH[1]/#\~/$HOME}"
+                [[ "$_compose_path" != /* ]] && _compose_path="${PROJECT_DIR}/${_compose_path}"
+                if [ -n "$COMPOSE_DIRECTIVE" ] && [ "$COMPOSE_DIRECTIVE" != "$_compose_path" ]; then
+                    echo "Warning: multiple 'compose:' directives in ${_prescan_cfg}; using the last one (${_compose_path})" >&2
+                fi
+                COMPOSE_DIRECTIVE="$_compose_path"
+            fi
+        done < "${_prescan_cfg}"
+        break
+    fi
+done
+unset _prescan_cfg _prescan_line _compose_path
+
+if [ -n "$COMPOSE_DIRECTIVE" ] && [ ! -f "$COMPOSE_DIRECTIVE" ]; then
+    echo "Error: compose file '${COMPOSE_DIRECTIVE}' (from compose: directive) not found" >&2
+    exit 1
+fi
+
 # --- Helper: run podman as the right user ---
 run_podman() {
     if [ -n "$RUN_AS_USER" ]; then
@@ -302,9 +330,9 @@ mkdir -p "${UV_CACHE_HOST}"
 VOLUMES+=(-v "${UV_CACHE_HOST}:/home/claude/.cache/uv:Z")
 
 # Read per-project extra mounts and port mappings from .agent-sandbox
+# (COMPOSE_DIRECTIVE was already resolved by the pre-scan above.)
 PORTS=()
 SANDBOX_PACKAGES=()
-COMPOSE_DIRECTIVE=""
 for config_file in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandbox"; do
     if [ -f "${config_file}" ]; then
         while IFS= read -r line; do
@@ -338,13 +366,8 @@ for config_file in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandb
             if [[ "$line" =~ ^claude-config:[[:space:]]*(.*) ]]; then
                 continue
             fi
-            # Compose file override: lines starting with "compose:"
+            # compose: consumed in the pre-scan above
             if [[ "$line" =~ ^compose:[[:space:]]*(.*) ]]; then
-                compose_path="${BASH_REMATCH[1]/#\~/$HOME}"
-                if [[ "$compose_path" != /* ]]; then
-                    compose_path="${PROJECT_DIR}/${compose_path}"
-                fi
-                COMPOSE_DIRECTIVE="$compose_path"
                 continue
             fi
             # Deprecated bare volume mount (no "volume:" prefix)
@@ -357,16 +380,11 @@ for config_file in "${PROJECT_DIR}/.agent-sandbox" "${PROJECT_DIR}/.claude-sandb
 done
 
 # Start project services if a compose file exists (explicit "compose:"
-# directive takes precedence over auto-detection).
+# directive — already validated in the pre-scan above — takes precedence
+# over auto-detection).
 EXTRA_COMPOSE_ARGS=()
-COMPOSE_FILE=""
-if [ -n "$COMPOSE_DIRECTIVE" ]; then
-    if [ ! -f "$COMPOSE_DIRECTIVE" ]; then
-        echo "Error: compose file '${COMPOSE_DIRECTIVE}' (from compose: directive) not found" >&2
-        exit 1
-    fi
-    COMPOSE_FILE="$COMPOSE_DIRECTIVE"
-else
+COMPOSE_FILE="$COMPOSE_DIRECTIVE"
+if [ -z "$COMPOSE_FILE" ]; then
     for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
         if [ -f "${PROJECT_DIR}/${f}" ]; then
             COMPOSE_FILE="${PROJECT_DIR}/${f}"
