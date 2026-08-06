@@ -1,0 +1,194 @@
+#+TITLE: Agent runtime architecture brief
+#+DESCRIPTION: Two-project split (sandbox wrapper vs. agent runtime) and OpenHands evaluation notes
+#+DATE: 2026-08-06
+
+* Status
+
+Paused for later revisit. No decision made yet. Captured here so the
+context isn't lost between sessions.
+
+* Background
+
+While debugging a test failure, we found that =src/agent_sandbox/=
+(the Python library added in commit =34742b8=, "feat: add
+agent-sandbox Python library") does not have interactive/PTY parity
+with the Bash =agent-sandbox= script, and never did — this is not a
+regression. Its commit message says it "replaces the Bash script" and
+that it exists "so that AEF can consume directly," but what actually
+shipped is a session-container + ~exec()~-capture model suited to
+programmatic one-shot commands, not an interactive TTY passthrough for
+a human driving Claude Code/Codex/Aider.
+
+Gaps found in the Python library vs. the Bash script (not exhaustive,
+see conversation for full list):
+- No ~-it~ / PTY passthrough — uses ~run -d~ + ~exec~ (captures
+  stdout/stderr as strings)
+- No default project-directory → =/workspace= mount
+- No default Claude auth mounting (only via explicit
+  ~claude-config:~ directive), no Codex/Aider handling
+- No git/SSH/SSH-agent/GitHub CLI config mounts
+- No mise/uv cache mounts
+- No per-project ~Containerfile~/~Dockerfile~ derived image
+- No ~--as <user>~ support
+- No per-agent env file loading
+- No ~AGENT_SANDBOX_IMAGE~/~AGENT_SANDBOX_EXTRA~ overrides
+
+* The two-project reframing
+
+Rather than trying to make the Python library a drop-in Bash-script
+replacement, we landed on treating these as two separate projects:
+
+1. *Sandbox wrapper* (what the Bash script is today) — process
+   isolation, credential/config mounting, container lifecycle. Thin
+   wrapper around a vendor CLI's own interactive chat (Claude Code,
+   Codex, Aider run unmodified inside the container).
+
+2. *Agent runtime* (what AEF actually needs) — owns the whole agent
+   loop itself: streaming, conversation context/history, tool
+   permissions, MCP, skills. Model-agnostic, with pluggable frontends
+   (CLI, web app, programmatic driver for AEF).
+
+These have almost no architectural overlap and shouldn't share a
+codebase. The existing Python library's container-lifecycle code
+(domain layer, ~parse_config~, ~container_adapter~, 579 tests) remains
+useful for (1) if we want a Python-based sandbox wrapper eventually,
+but closing its parity gaps is a separate, smaller effort from (2).
+
+* Why not just use Claude Agent SDK for (2)
+
+Anthropic's Claude Agent SDK is the harness Claude Code itself runs
+on — context management, permissions, MCP, hooks, subagents, streaming
+— and would have been the obvious foundation. *Ruled out as the
+default*: the company is having active conversations about *sovereign
+AI* for security and cost control, so Claude is not the de-facto model
+choice going forward (even though AEF has been Claude-only so far).
+Agent Runtime (2) needs to be model-agnostic from the start, not
+retrofitted later.
+
+* OpenHands evaluation (research pass, 2026-08-06)
+
+Investigated [[https://github.com/OpenHands/OpenHands][OpenHands]]
+(formerly OpenDevin / All-Hands-AI — GitHub org renamed
+All-Hands-AI → OpenHands, Oct 2025) as a candidate for project (2).
+
+*Note*: OpenHands is mid-rebrand as of this writing. It's pivoting
+from a single coding agent to a multi-agent frontend ("Agent Canvas")
+built on a new ~openhands-software-agent-sdk~ ("V1"). Older docs/
+tutorials describe the V0 layout (~openhands/controller~,
+~openhands/events~, ~microagents/~ dirs), which is being phased out.
+Any follow-up work should target V1 specifically.
+
+** Architecture fit — good
+
+"Tiny core" design matches the (2) shape closely: a stateless ~Agent~
+emits Actions, a ~Conversation~ runs the loop over an append-only
+~EventLog~, a pluggable ~Workspace~ (local process / Docker / remote /
+Apptainer) executes Actions, LLM access via LiteLLM. Four packages:
+~openhands.sdk~, ~openhands.tools~, ~openhands.workspace~,
+~openhands.agent_server~ (REST/WebSocket). CLI and web UI are both
+thin consumers of the same core, not forks of each other — genuinely
+frontend-agnostic, which is exactly what we want AEF + a future CLI/
+web frontend to share.
+
+** Model-agnosticism — real, with caveats
+
+LiteLLM-backed; documented support for Ollama, LM Studio, vLLM, SGLang
+via OpenAI-compatible endpoints. No hard vendor lock-in found in the
+core loop. Practical (not architectural) gotchas:
+- Local model context window must be set explicitly — e.g. Ollama
+  defaults to 4096 tokens, which silently breaks things.
+- Local open-weight models can be less reliable at tool-calling than
+  Claude/GPT-tier models — a model-quality issue, not a harness issue.
+
+** MCP — client-only
+
+Converts external MCP tool schemas into OpenHands Tools. Transports:
+stdio, SSE (legacy), Streamable HTTP (preferred). No confirmed
+MCP-*server* support (requests for it exist but resolution unclear).
+
+** Skills — microagents, directly comparable
+
+Markdown + YAML frontmatter at =.agents/skills/<name>/SKILL.md=
+(legacy =.openhands/skills/= / =microagents/= still supported).
+Always-on, keyword-triggered, and path-triggered variants. Precedence:
+project > user > public registry > legacy.
+
+** Permissions/safety — real gap to resolve
+
+~ConfirmationPolicy~ (AlwaysConfirm / NeverConfirm / ConfirmRisky) plus
+a ~SecurityAnalyzer~ layer (default ~LLMSecurityAnalyzer~, plus
+deterministic analyzers). *Open concern*: headless/automation mode is
+reported to always auto-approve tool calls with no override — this is
+exactly the mode AEF would run in, and undercuts the "security and
+cost control" motivation for going sovereign in the first place if
+true. Needs direct verification against V1, not just docs.
+
+** Sandboxing / telemetry
+
+Backends: Docker (sibling container via host socket, not
+Docker-in-Docker), Process (no isolation), Remote/API, Apptainer
+(rootless/HPC). No primary doc requires calling an OpenHands-operated
+cloud service for core execution. PostHog analytics present,
+reportedly opt-out — exact disable mechanism not confirmed; verify in
+source before committing to an air-gapped deployment.
+
+** Streaming / context
+
+WebSocket (Socket.IO) with conversation/event-id based resumption.
+Event log persisted as JSON (pause/resume/fork). Default
+~LLMSummarizingCondenser~ compacts history preserving goals/progress/
+critical files; a 2x cost-reduction claim is vendor-self-reported, not
+independently verified.
+
+** Maturity
+
+MIT license. ~83k GitHub stars, 10.7k forks, 463+ contributors,
+active (daily commits, v1.10.0 released 2026-08-05). Founded as
+OpenDevin, March 2024. VC-funded open-core: $5M seed (2024) + $18.8M
+Series A (Nov 2025, Madrona) — OSS core reportedly stays fully
+capable, enterprise features (admin console, k8s/Sysbox, marketplace)
+are paid add-ons; worth monitoring, not yet a red flag. *Gap*: only
+vendor-authored case studies found, no independent production
+deployment writeups.
+
+** Deployment topology
+
+Genuine headless CLI (~uv tool install openhands~, then
+~openhands --headless -t "task" --json~) — no Docker required with
+Process-mode sandboxing, same SDK core as web mode. Full web mode
+(Agent Canvas) needs the agent server plus a chosen execution backend.
+Docker daemon only mandatory if using Docker-based sandboxing; Process
+mode skips it but with materially weaker isolation than our current
+Podman-based approach.
+
+* Open questions before deciding
+
+1. What actually happens to permission gating in headless/automation
+   mode — is auto-approve-only still true in V1?
+2. Can telemetry be fully disabled for an air-gapped deployment? What's
+   the exact mechanism?
+3. Tool-call reliability against our actual target self-hosted model
+   (not just "local models in general").
+4. Does V0 → V1 churn stabilize soon, or is this too early to build
+   on?
+
+* Recommended next step
+
+Don't decide from docs. Run a small hands-on spike against the current
+~openhands-software-agent-sdk~ (V1, not older tutorials):
+- Point it at a self-hosted vLLM or Ollama endpoint.
+- Drive it in headless mode the way AEF would.
+- Specifically check: permission-gating behavior in that mode,
+  whether telemetry can be fully disabled, and tool-call reliability
+  against the target open-weight model.
+
+* Alternatives noted but not deep-dived
+
+- *Goose* (Block) — MCP-native, model-agnostic including local models
+  via Ollama, CLI + desktop frontends, lighter weight than OpenHands.
+- *LangGraph* — lower-level orchestration toolkit; provider-agnostic,
+  more assembly required (streaming/permissions/MCP wiring is on us).
+- *Agent Client Protocol (ACP)* (Zed) — not a runtime, but the
+  relevant protocol pattern ("one agent brain, many frontends") if we
+  end up building (2) ourselves rather than adopting an existing
+  runtime.
