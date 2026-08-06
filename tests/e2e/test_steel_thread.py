@@ -154,7 +154,7 @@ def _run_cli(
         :class:`subprocess.CompletedProcess` with ``returncode``, ``stdout``,
         and ``stderr`` populated.
     """
-    inline_script = "from agent_sandbox.cli import main; main()"
+    inline_script = "from agent_sandbox.cli.main import main; main()"
     cmd = [sys.executable, "-c", inline_script] + list(cli_args)
     return subprocess.run(
         cmd,
