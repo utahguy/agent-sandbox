@@ -297,6 +297,9 @@ packages: ffmpeg
 
 # Claude account to use (default: ~/.claude)
 claude-config: ~/.claude-client-acme
+
+# Compose file to start and join the sandbox to (overrides auto-detection)
+compose: server/compose.yml
 #+end_src
 
 Supported directives:
@@ -311,6 +314,7 @@ Supported directives:
 | =runtime=      | =auto= / =docker= / =podman=   | Override container runtime                   |
 | =packages=     | =PACKAGE_NAME=                  | apt package to install at startup (see note) |
 | =claude-config= | =PATH=                         | Host Claude config dir for account selection |
+| =compose=      | =PATH=                          | Compose file to start/join (overrides auto-detection of =compose.yml= etc.) |
 
 For backwards compatibility, ~.claude-sandbox~ is also recognized.
 
@@ -370,6 +374,20 @@ services:
 With this file present, the agent can connect to =db:5432= and
 =redis:6379= directly.  No port mappings or extra configuration
 required.
+
+If your compose file lives somewhere other than the project root
+(e.g. a monorepo with the compose file under a subdirectory), point
+at it explicitly with the =compose:= directive in =.agent-sandbox=
+instead of relying on auto-detection:
+
+#+begin_src conf
+compose: server/compose.yml
+#+end_src
+
+The path is resolved relative to the project root (=~= is expanded to
+your home directory); an explicit =compose:= directive always takes
+precedence over auto-detected =compose.yml=/=docker-compose.yml=
+files.
 
 * MCP Server Integration
 
