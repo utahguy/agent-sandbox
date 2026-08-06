@@ -605,7 +605,7 @@ class TestContainerfileEntrypointResolution:
                     "-f", str(CONTAINERFILE),
                     "-t", tag,
                     "--no-cache",
-                    str(PROJECT_ROOT),
+                    str(CONTAINERFILE.parent),
                 ],
                 capture_output=True,
                 text=True,
