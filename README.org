@@ -318,6 +318,12 @@ Supported directives:
 
 For backwards compatibility, ~.claude-sandbox~ is also recognized.
 
+*Note*: the Bash CLI directive syntax above (colon-suffixed, e.g.
+~compose: path~) is specific to this script. The Python library reads
+the same =.agent-sandbox= filename but parses whitespace-separated
+directives with no colon (e.g. ~compose path~) — a config file written
+for one is not portable to the other as-is.
+
 ** System packages: =packages:= vs project =Containerfile=
 
 =packages:= installs apt packages as root at *every container start*
