@@ -27,6 +27,7 @@ setup_test() {
     TEST_PROJECT="${TEST_TMP}/project"
     TEST_BIN="${TEST_TMP}/bin"
     PODMAN_LOG="${TEST_TMP}/podman.log"
+    COMPOSE_LOG="${TEST_TMP}/compose.log"
 
     mkdir -p "$TEST_HOME" "$TEST_PROJECT" "$TEST_BIN"
 
@@ -43,7 +44,11 @@ case "\$1" in
         exit 0
         ;;
     build)    exit 0 ;;
-    compose)  exit 0 ;;
+    compose)
+        shift
+        printf '%s\n' "\$@" >> "${COMPOSE_LOG}"
+        exit 0
+        ;;
     inspect)  exit 0 ;;
     run)
         shift
@@ -96,6 +101,26 @@ refute_arg() {
 
 # Assert a -v VOLUME arg is present (checks the value line, not the -v).
 assert_volume() { assert_arg "$1"; }
+
+# Assert COMPOSE_LOG contains a line matching needle exactly.
+assert_compose_arg() {
+    local needle="$1"
+    if ! grep -qxF -- "$needle" "$COMPOSE_LOG" 2>/dev/null; then
+        echo "    expected compose arg: $needle"
+        echo "    actual compose argv:"
+        sed 's/^/      /' "$COMPOSE_LOG" 2>/dev/null || echo "      (no log)"
+        return 1
+    fi
+}
+
+# Assert COMPOSE_LOG does NOT contain a line matching needle.
+refute_compose_arg() {
+    local needle="$1"
+    if grep -qxF -- "$needle" "$COMPOSE_LOG" 2>/dev/null; then
+        echo "    unexpected compose arg present: $needle"
+        return 1
+    fi
+}
 
 # --- Test runner -------------------------------------------------------------
 
@@ -541,6 +566,42 @@ EOF
     assert_volume "${alt_config}/.credentials.json:/home/claude/.claude/.credentials.json:Z" || return 1
 }
 
+test_compose_directive_relative_path() {
+    mkdir -p "${TEST_PROJECT}/server"
+    touch "${TEST_PROJECT}/server/compose.yml"
+    echo "compose: server/compose.yml" > "${TEST_PROJECT}/.agent-sandbox"
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    assert_compose_arg "${TEST_PROJECT}/server/compose.yml" || return 1
+}
+
+test_compose_directive_tilde_expansion() {
+    mkdir -p "${TEST_HOME}/shared"
+    touch "${TEST_HOME}/shared/compose.yml"
+    echo "compose: ~/shared/compose.yml" > "${TEST_PROJECT}/.agent-sandbox"
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    assert_compose_arg "${TEST_HOME}/shared/compose.yml" || return 1
+}
+
+test_compose_directive_overrides_autodetect() {
+    # Auto-detected file at the project root...
+    touch "${TEST_PROJECT}/compose.yml"
+    # ...but the directive points elsewhere and must win.
+    mkdir -p "${TEST_PROJECT}/alt"
+    touch "${TEST_PROJECT}/alt/compose.yml"
+    echo "compose: alt/compose.yml" > "${TEST_PROJECT}/.agent-sandbox"
+    "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null || return 1
+    assert_compose_arg "${TEST_PROJECT}/alt/compose.yml" || return 1
+    refute_compose_arg "${TEST_PROJECT}/compose.yml" || return 1
+}
+
+test_compose_directive_missing_file_errors() {
+    echo "compose: does-not-exist.yml" > "${TEST_PROJECT}/.agent-sandbox"
+    if "$AGENT_SANDBOX" "$TEST_PROJECT" >/dev/null 2>&1; then
+        echo "    expected nonzero exit when compose: file is missing"
+        return 1
+    fi
+}
+
 # --- Run all -----------------------------------------------------------------
 
 echo "Running agent-sandbox tests..."
@@ -587,6 +648,10 @@ run_test "claude-config: overrides default ~/.claude creds"   test_claude_config
 run_test "claude-config: missing dir does not error"          test_claude_config_missing_dir_does_not_error
 run_test "claude-config: settings.json mounted read-only"     test_claude_config_settings_mounted_readonly
 run_test "claude-config: coexists with other directives"      test_claude_config_coexists_with_other_directives
+run_test "compose: directive resolves relative path"          test_compose_directive_relative_path
+run_test "compose: directive expands leading ~"                test_compose_directive_tilde_expansion
+run_test "compose: directive overrides auto-detection"         test_compose_directive_overrides_autodetect
+run_test "compose: directive errors when file missing"         test_compose_directive_missing_file_errors
 
 echo
 if [ "$FAIL" -eq 0 ]; then
